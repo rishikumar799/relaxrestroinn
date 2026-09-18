@@ -1,0 +1,6 @@
+{
+  "name": "RELAX RESTO INN - Hotel Management & Billing",
+  "description": "Professional hotel front-desk management, check-in/out, GST tax invoicing, and billing system with Firebase.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

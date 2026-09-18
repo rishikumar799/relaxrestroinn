@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Core check for authenticated admin user
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // hotel_settings/main
+    match /hotel_settings/{docId} {
+      allow read, write: if true;
+    }
+
+    // guests/{guestId}
+    match /guests/{guestId} {
+      allow read, write: if true;
+    }
+
+    // rooms/{roomId}
+    match /rooms/{roomId} {
+      allow read, write: if true;
+    }
+
+    // stays/{stayId}
+    match /stays/{stayId} {
+      allow read, write: if true;
+    }
+
+    // bills/{billId}
+    match /bills/{billId} {
+      allow read, write: if true;
+    }
+
+    // payments/{paymentId}
+    match /payments/{paymentId} {
+      allow read, write: if true;
+    }
+
+    // daily_summaries/{date}
+    match /daily_summaries/{date} {
+      allow read, write: if true;
+    }
+
+    // activity_logs/{logId}
+    match /activity_logs/{logId} {
+      allow read, write: if true;
+    }
+
+    // counters/invoices
+    match /counters/{counterId} {
+      allow read, write: if true;
+    }
+
+    // admins/{userId} & users/{userId}
+    match /admins/{userId} {
+      allow read, write: if true;
+    }
+
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+  }
+}

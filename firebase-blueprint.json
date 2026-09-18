@@ -1,0 +1,194 @@
+{
+  "entities": {
+    "AdminUser": {
+      "title": "Admin User",
+      "description": "Administrator and front desk staff authentication and profile records",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email", "description": "Admin email address" },
+        "displayName": { "type": "string", "description": "Display name of admin" },
+        "role": { "type": "string", "enum": ["admin", "manager", "receptionist"], "description": "Authorization role" },
+        "status": { "type": "string", "enum": ["active", "suspended"], "description": "Account status" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastLoginAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Room": {
+      "title": "Room",
+      "description": "Hotel room inventory, tariff, and housekeeping status",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "number": { "type": "string" },
+        "floor": { "type": "number" },
+        "type": { "type": "string", "enum": ["Single", "Double", "Deluxe", "Suite", "Executive"] },
+        "tariff": { "type": "number" },
+        "maxGuests": { "type": "number" },
+        "status": { "type": "string", "enum": ["available", "occupied", "cleaning", "maintenance"] },
+        "amenities": { "type": "array" }
+      },
+      "required": ["number", "tariff", "status"]
+    },
+    "Stay": {
+      "title": "Stay",
+      "description": "Guest stay check-in and check-out management",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "roomId": { "type": "string" },
+        "roomNumber": { "type": "string" },
+        "guestName": { "type": "string" },
+        "guestPhone": { "type": "string" },
+        "idProofType": { "type": "string" },
+        "idProofNumber": { "type": "string" },
+        "address": { "type": "string" },
+        "numGuests": { "type": "number" },
+        "checkIn": { "type": "string", "format": "date-time" },
+        "checkOut": { "type": "string", "format": "date-time" },
+        "expectedCheckOut": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["active", "checked_out"] },
+        "tariff": { "type": "number" },
+        "advancePaid": { "type": "number" },
+        "billId": { "type": "string" }
+      },
+      "required": ["roomNumber", "guestName", "checkIn", "status"]
+    },
+    "Guest": {
+      "title": "Guest",
+      "description": "Guest CRM record and stay history",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "idProofType": { "type": "string" },
+        "idProofNumber": { "type": "string" },
+        "address": { "type": "string" },
+        "totalStays": { "type": "number" },
+        "totalSpent": { "type": "number" },
+        "lastStay": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "phone"]
+    },
+    "Bill": {
+      "title": "Bill",
+      "description": "GST tax invoice generated for guest stays and services",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "billNumber": { "type": "string" },
+        "stayId": { "type": "string" },
+        "roomNumber": { "type": "string" },
+        "guestName": { "type": "string" },
+        "guestPhone": { "type": "string" },
+        "items": { "type": "array" },
+        "subtotal": { "type": "number" },
+        "cgstRate": { "type": "number" },
+        "cgstAmount": { "type": "number" },
+        "sgstRate": { "type": "number" },
+        "sgstAmount": { "type": "number" },
+        "discount": { "type": "number" },
+        "grandTotal": { "type": "number" },
+        "totalPaid": { "type": "number" },
+        "balanceDue": { "type": "number" },
+        "status": { "type": "string", "enum": ["draft", "unpaid", "partially_paid", "paid"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["billNumber", "guestName", "grandTotal", "status"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Financial payment transaction records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "billId": { "type": "string" },
+        "stayId": { "type": "string" },
+        "amount": { "type": "number" },
+        "mode": { "type": "string", "enum": ["Cash", "UPI", "Credit Card", "Debit Card", "Net Banking", "Advance Adjustment"] },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "notes": { "type": "string" },
+        "reference": { "type": "string" }
+      },
+      "required": ["amount", "mode", "timestamp"]
+    },
+    "HotelSettings": {
+      "title": "Hotel Settings",
+      "description": "Property metadata, legal info, and tax configurations",
+      "type": "object",
+      "properties": {
+        "hotelName": { "type": "string" },
+        "legalName": { "type": "string" },
+        "gstin": { "type": "string" },
+        "cin": { "type": "string" },
+        "address": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "cgstRate": { "type": "number" },
+        "sgstRate": { "type": "number" },
+        "invoicePrefix": { "type": "string" },
+        "checkInTime": { "type": "string" },
+        "checkOutTime": { "type": "string" }
+      },
+      "required": ["hotelName", "gstin"]
+    },
+    "Activity": {
+      "title": "Activity",
+      "description": "Audit trail log of front desk operations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "action": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "description": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["action", "description", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Administrator and staff credentials and permissions"
+    },
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "User profiles for authenticated staff"
+    },
+    "/rooms/{roomId}": {
+      "schema": { "$ref": "#/entities/Room" },
+      "description": "Hotel rooms directory"
+    },
+    "/stays/{stayId}": {
+      "schema": { "$ref": "#/entities/Stay" },
+      "description": "Guest stay bookings and check-in logs"
+    },
+    "/guests/{guestId}": {
+      "schema": { "$ref": "#/entities/Guest" },
+      "description": "Guest customer database"
+    },
+    "/bills/{billId}": {
+      "schema": { "$ref": "#/entities/Bill" },
+      "description": "GST bills and tax invoices"
+    },
+    "/payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/Payment" },
+      "description": "Payment receipts and transaction records"
+    },
+    "/hotel_settings/{configId}": {
+      "schema": { "$ref": "#/entities/HotelSettings" },
+      "description": "Global hotel and invoicing configuration"
+    },
+    "/activities/{activityId}": {
+      "schema": { "$ref": "#/entities/Activity" },
+      "description": "Audit trail of operations"
+    },
+    "/counters/{counterId}": {
+      "schema": { "$ref": "#/entities/Bill" },
+      "description": "Sequential invoice number counters"
+    }
+  }
+}
