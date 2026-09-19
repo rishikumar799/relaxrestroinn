@@ -135,15 +135,19 @@ export interface Stay {
 export interface BillLineItem {
   id: string;
   date: string;
+  roomDetails?: string;
   description: string;
-  hsn: string;
   rate: number;
-  days: number;
+  numberOfDays?: number | string;
+  days?: number;
   value: number;
   discount: number;
   total: number;
-  gst: number;
+  gstRate: number; // e.g. 12, 5, 18, 0
+  gstAmount: number;
+  gst?: number;
   netTotal: number;
+  hsn?: string;
 }
 
 export interface BillSummaryItem {
@@ -153,14 +157,20 @@ export interface BillSummaryItem {
 
 export interface AdvanceReceiptItem {
   date: string;
-  desc: string;
+  description?: string;
+  desc?: string;
   refNo: string;
-  room: string;
+  roomDetails?: string;
+  room?: string;
   amount: number;
+  paymentType?: string;
+  paymentId?: string;
 }
 
 export interface TaxSummaryItem {
-  taxName: string; // CGST (6.00%), SGST (6.00%), IGST (12.00%)
+  accountName?: string;
+  taxName: string; // e.g. Sgst@2.5, Cgst@2.5, Cgst@6, Sgst@6, Igst@12
+  taxRate?: number;
   taxableAmount: number;
   taxAmount: number;
 }
@@ -177,52 +187,93 @@ export interface Bill {
   guestName: string;
   guestPhone: string;
   guestAddress: string;
+  guestEmail?: string;
+  
+  // Pax counts
+  paxAdult?: number;
+  paxChild?: number;
+  pax: string; // e.g. "(Adult : 6, Child : 0)"
+
+  // ID Card
   idCardNumber: string;
   idCardType?: string;
-  pax: string; // e.g. "2 Adults, 0 Child"
+
+  // Company Info
+  companyName?: string;
+  companyAddress?: string;
   companyDetails: string;
   companyGSTIN: string;
+
+  // OTA / Ref
   refOTA: string;
   refOTAGSTIN: string;
+
+  // Location
   stateCode: string;
   placeOfSupply: string;
+
+  // Room & Stay
   roomNumber: string;
-  roomDetails: string; // e.g. "TARIFF (210-DELUX ROOM)"
   roomType: string;
+  roomDetails: string; // e.g. "309-SUIT ROOM ( Plan Type : CP)"
   planType: string;
+
+  // Check-in / Check-out
   checkInDate: string;
   checkInTime: string;
   checkOutDate: string;
   checkOutTime: string;
+
+  // Booking & GRC
   bookingId: string;
+  reservationId?: string;
   grcNumber: string;
+
+  // Payment & Days
   paymentType: PaymentMethod | string;
   numberOfDays: number;
+
+  // Line items
   lineItems: BillLineItem[];
+
+  // Totals & Rounding
   subtotal: number;
+  roundingAmount?: number;
+  grossTotalBeforeRounding?: number;
+  grossTotal: number;
+  advance: number;
+  balance: number;
+  amountInWords: string;
+
   discount: number;
   taxableAmount: number;
   cgst: number;
   sgst: number;
   igst: number;
   totalGST: number;
-  grossTotal: number;
-  advance: number;
-  balance: number;
-  amountInWords: string;
+  isInterState?: boolean;
+
+  // Summaries
   summary: BillSummaryItem[];
+  advanceReceiptDetails?: AdvanceReceiptItem[];
   advanceDetails: AdvanceReceiptItem[];
   taxSummary: TaxSummaryItem[];
+
+  // Signatures
   authorizedBy: string;
   verifiedBy: string;
   guestSignatureName: string;
   guestSignaturePlace: string;
+  signatureImageUrl?: string;
+
   notes?: string;
   voidReason?: string;
   deleted?: boolean;
   deletedAt?: any;
   createdAt?: any;
   updatedAt?: any;
+  createdBy?: string;
+  updatedBy?: string;
 }
 
 export interface Payment {

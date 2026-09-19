@@ -89,3 +89,19 @@ export function convertAmountToWords(amount: number): string {
   const result = (isNegative ? 'MINUS ' : '') + words.trim() + ' ONLY';
   return result.replace(/\s+/g, ' ').toUpperCase();
 }
+
+/**
+  * Formats amount into title-case currency words with parentheses.
+  * e.g., 2280 -> "(Two Thousand Two Hundred And Eighty Rupees Only)"
+  */
+export function formatAmountInWords(amount: number): string {
+  const upper = convertAmountToWords(amount);
+  const titleCased = upper
+    .toLowerCase()
+    .split(' ')
+    .filter(Boolean)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+  return `(${titleCased})`;
+}
+

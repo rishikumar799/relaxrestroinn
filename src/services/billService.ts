@@ -21,9 +21,10 @@ import { saveOrUpdateGuest } from './guestService';
 import { recordPayment } from './paymentService';
 import { logActivity } from './activityService';
 import { localFallbackStore } from './localFallbackStore';
-import { convertAmountToWords } from '../utils/numberToWords';
+import { formatAmountInWords, convertAmountToWords } from '../utils/numberToWords';
 import { roundToTwo } from '../utils/currency';
 import { calculateDaysBetween, getTodayDateString, getCurrentTimeString } from '../utils/date';
+import { calculateLineItem, computeTaxSummary, computeBillTotals } from '../utils/tax';
 
 const BILLS_COLLECTION = 'bills';
 const STAYS_COLLECTION = 'stays';
@@ -40,6 +41,8 @@ export async function createCheckoutBill(params: {
   finalPaymentRef?: string;
   notes?: string;
   userEmail?: string;
+  customLineItems?: BillLineItem[];
+  customRounding?: number;
 }): Promise<Bill> {
   const { 
     stay, 
@@ -52,7 +55,9 @@ export async function createCheckoutBill(params: {
     finalPaymentType = stay.paymentType,
     finalPaymentRef = '',
     notes = '',
-    userEmail = 'admin'
+    userEmail = 'admin',
+    customLineItems,
+    customRounding
   } = params;
 
   const settings = await getHotelSettings();
@@ -61,73 +66,78 @@ export async function createCheckoutBill(params: {
   const billDate = actualCheckOutDate || getTodayDateString();
   const billTime = actualCheckOutTime || getCurrentTimeString();
 
-  // Calculations
+  const gstRate = stay.gstRate !== undefined ? stay.gstRate : (settings.defaultGSTRate || 12);
   const roomTariff = stay.roomTariff || 0;
   const roomValue = roundToTwo(roomTariff * numberOfDays);
-  const totalValue = roundToTwo(roomValue + extraCharges);
-  const taxableAmount = roundToTwo(Math.max(0, totalValue - discount));
-  
-  const gstRate = stay.gstRate !== undefined ? stay.gstRate : (settings.defaultGSTRate || 12);
-  const totalGST = roundToTwo((taxableAmount * gstRate) / 100);
-  
-  let cgst = 0;
-  let sgst = 0;
-  let igst = 0;
+  const roomDetailsStr = `${stay.roomNumber}-${(stay.roomType || 'ROOM').toUpperCase()}${stay.planType ? ` ( Plan Type : ${stay.planType} )` : ''}`;
+  const itemRoomDetails = `${stay.roomNumber}-${(stay.roomType || 'ROOM').toUpperCase()}`;
 
-  if (stay.isInterState) {
-    igst = totalGST;
+  // Build line items
+  let lineItems: BillLineItem[] = [];
+  if (customLineItems && customLineItems.length > 0) {
+    lineItems = customLineItems.map(calculateLineItem);
   } else {
-    cgst = roundToTwo(totalGST / 2);
-    sgst = roundToTwo(totalGST - cgst);
-  }
-
-  const grossTotal = roundToTwo(taxableAmount + totalGST);
-  const totalAdvance = roundToTwo(stay.advancePaid || 0);
-  const totalPaidSoFar = roundToTwo(totalAdvance + (finalPaymentAmount || 0));
-  const balance = roundToTwo(Math.max(0, grossTotal - totalPaidSoFar));
-
-  const amountInWords = convertAmountToWords(grossTotal);
-
-  // Line items
-  const lineItems: BillLineItem[] = [
-    {
+    // 1. Room tariff item
+    lineItems.push(calculateLineItem({
       id: `li-1`,
       date: stay.checkInDate,
-      description: `TARIFF (${stay.roomNumber}-${(stay.roomType || 'ROOM').toUpperCase()})`,
-      hsn: settings.hsnCode || '996311',
+      roomDetails: itemRoomDetails,
+      description: 'TARIFF',
       rate: roomTariff,
+      numberOfDays: numberOfDays,
       days: numberOfDays,
       value: roomValue,
       discount: discount > 0 && extraCharges === 0 ? discount : 0,
-      total: roundToTwo(roomValue - (discount > 0 && extraCharges === 0 ? discount : 0)),
-      gst: roundToTwo(((roomValue - (discount > 0 && extraCharges === 0 ? discount : 0)) * gstRate) / 100),
-      netTotal: roundToTwo(roomValue + ((roomValue * gstRate) / 100)),
-    }
-  ];
-
-  if (extraCharges > 0) {
-    const extraGST = roundToTwo((extraCharges * gstRate) / 100);
-    lineItems.push({
-      id: `li-extra`,
-      date: billDate,
-      description: 'ADDITIONAL SERVICES / ROOM EXTRAS',
+      gstRate: gstRate,
       hsn: settings.hsnCode || '996311',
-      rate: extraCharges,
-      days: 1,
-      value: extraCharges,
-      discount: discount > 0 ? discount : 0,
-      total: roundToTwo(extraCharges - discount),
-      gst: extraGST,
-      netTotal: roundToTwo(extraCharges + extraGST),
-    });
+    }));
+
+    // 2. Extra charges items if any
+    if (stay.extraChargesList && stay.extraChargesList.length > 0) {
+      stay.extraChargesList.forEach((extra, idx) => {
+        const isFood = extra.description.toLowerCase().includes('food') || extra.description.toLowerCase().includes('restaurant') || extra.description.toLowerCase().includes('dining');
+        const extraGSTRate = isFood ? 5 : gstRate;
+        lineItems.push(calculateLineItem({
+          id: `li-extra-${idx}`,
+          date: extra.date || billDate,
+          roomDetails: itemRoomDetails,
+          description: extra.description || 'Food Charges',
+          rate: extra.amount,
+          numberOfDays: '-',
+          value: extra.amount,
+          discount: 0,
+          gstRate: extraGSTRate,
+          hsn: isFood ? '996331' : (settings.hsnCode || '996311'),
+        }));
+      });
+    } else if (extraCharges > 0) {
+      lineItems.push(calculateLineItem({
+        id: `li-extra`,
+        date: billDate,
+        roomDetails: itemRoomDetails,
+        description: 'Food Charges',
+        rate: extraCharges,
+        numberOfDays: '-',
+        value: extraCharges,
+        discount: discount > 0 ? discount : 0,
+        gstRate: 5,
+        hsn: '996331',
+      }));
+    }
   }
 
-  // Summary
+  const totalAdvance = roundToTwo(stay.advancePaid || 0);
+  const totalPaid = roundToTwo(totalAdvance + (finalPaymentAmount || 0));
+
+  const totals = computeBillTotals(lineItems, totalPaid, customRounding);
+  const taxSummary = computeTaxSummary(lineItems, stay.isInterState);
+
+  // Summary accounts
   const summary: BillSummaryItem[] = [
     { accountName: 'TARIFF', amount: roomValue }
   ];
   if (extraCharges > 0) {
-    summary.push({ accountName: 'EXTRAS', amount: extraCharges });
+    summary.push({ accountName: 'FOOD & EXTRAS', amount: extraCharges });
   }
 
   // Advance Receipts
@@ -135,44 +145,31 @@ export async function createCheckoutBill(params: {
   if (totalAdvance > 0) {
     advanceDetails.push({
       date: stay.checkInDate,
-      desc: `ADVANCE (${stay.paymentType})`,
-      refNo: stay.bookingId || stay.grcNumber || 'ADV-01',
+      description: stay.paymentType ? `Bank ( ${stay.paymentType} )` : 'Cash',
+      desc: stay.paymentType ? `Bank ( ${stay.paymentType} )` : 'Cash',
+      refNo: stay.bookingId || stay.grcNumber || `A-R-${stay.roomNumber}-${stay.checkInDate.slice(-5)}`,
+      roomDetails: stay.roomNumber,
       room: stay.roomNumber,
       amount: totalAdvance,
+      paymentType: stay.paymentType,
     });
   }
   if (finalPaymentAmount > 0) {
     advanceDetails.push({
       date: billDate,
-      desc: `CHECKOUT PAYMENT (${finalPaymentType})`,
-      refNo: finalPaymentRef || 'FINAL-01',
+      description: finalPaymentType ? `Bank ( ${finalPaymentType} )` : 'Cash',
+      desc: finalPaymentType ? `Bank ( ${finalPaymentType} )` : 'Cash',
+      refNo: finalPaymentRef || `FINAL-${stay.roomNumber}`,
+      roomDetails: stay.roomNumber,
       room: stay.roomNumber,
       amount: finalPaymentAmount,
+      paymentType: finalPaymentType,
     });
   }
 
-  // Tax Summary
-  const taxSummary: TaxSummaryItem[] = [];
-  if (stay.isInterState) {
-    taxSummary.push({
-      taxName: `IGST (${gstRate.toFixed(2)}%)`,
-      taxableAmount,
-      taxAmount: igst,
-    });
-  } else {
-    taxSummary.push({
-      taxName: `CGST (${(gstRate / 2).toFixed(2)}%)`,
-      taxableAmount,
-      taxAmount: cgst,
-    });
-    taxSummary.push({
-      taxName: `SGST (${(gstRate / 2).toFixed(2)}%)`,
-      taxableAmount,
-      taxAmount: sgst,
-    });
-  }
-
-  const paxText = `${stay.paxAdults || 1} Adult${(stay.paxAdults || 1) > 1 ? 's' : ''}${stay.paxChildren ? `, ${stay.paxChildren} Child` : ''}`;
+  const adultCount = stay.paxAdults !== undefined ? stay.paxAdults : 1;
+  const childCount = stay.paxChildren !== undefined ? stay.paxChildren : 0;
+  const paxText = `(Adult : ${adultCount}, Child : ${childCount})`;
 
   const bill: Bill = {
     billId,
@@ -180,52 +177,62 @@ export async function createCheckoutBill(params: {
     billDate,
     billTime,
     billType: 'stay',
-    status: balance <= 0 ? 'paid' : 'partially_paid',
+    status: totals.balance <= 0 ? 'paid' : 'partially_paid',
     stayId: stay.stayId,
     guestId: stay.guestId,
     guestName: stay.guestName,
     guestPhone: stay.guestPhone,
     guestAddress: stay.guestAddress || '',
+    guestEmail: stay.guestEmail || '',
+    paxAdult: adultCount,
+    paxChild: childCount,
+    pax: paxText,
     idCardNumber: stay.idNumber || '',
     idCardType: stay.idType || 'Aadhaar Card',
-    pax: paxText,
-    companyDetails: stay.companyName ? `${stay.companyName}${stay.companyAddress ? ', ' + stay.companyAddress : ''}` : '',
+    companyName: stay.companyName || '',
+    companyAddress: stay.companyAddress || '',
+    companyDetails: stay.companyName ? `${stay.companyName}${stay.companyAddress ? ' ' + stay.companyAddress : ''}` : '',
     companyGSTIN: stay.companyGSTIN || '',
     refOTA: stay.refOTA || '',
     refOTAGSTIN: stay.refOTAGSTIN || '',
-    stateCode: settings.stateCode || '37',
-    placeOfSupply: settings.placeOfSupply || 'ANDHRA PRADESH (37)',
+    stateCode: settings.stateCode || '28',
+    placeOfSupply: settings.placeOfSupply || 'VISAKHAPATNAM-530016',
     roomNumber: stay.roomNumber,
-    roomDetails: `TARIFF (${stay.roomNumber}-${(stay.roomType || 'ROOM').toUpperCase()})`,
+    roomDetails: roomDetailsStr,
     roomType: stay.roomType,
-    planType: stay.planType,
+    planType: stay.planType || 'CP',
     checkInDate: stay.checkInDate,
     checkInTime: stay.checkInTime || settings.defaultCheckInTime || '12:00',
     checkOutDate: actualCheckOutDate,
     checkOutTime: actualCheckOutTime || settings.defaultCheckOutTime || '11:00',
     bookingId: stay.bookingId || '',
+    reservationId: stay.bookingId || '',
     grcNumber: stay.grcNumber || '',
-    paymentType: finalPaymentType || stay.paymentType,
+    paymentType: finalPaymentType || stay.paymentType || 'Wallet',
     numberOfDays,
     lineItems,
-    subtotal: totalValue,
-    discount,
-    taxableAmount,
-    cgst,
-    sgst,
-    igst,
-    totalGST,
-    grossTotal,
-    advance: totalPaidSoFar,
-    balance,
-    amountInWords,
+    subtotal: totals.subtotal,
+    roundingAmount: totals.roundingAmount,
+    grossTotalBeforeRounding: totals.grossTotalBeforeRounding,
+    grossTotal: totals.grossTotal,
+    advance: totalPaid,
+    balance: totals.balance,
+    amountInWords: totals.amountInWords,
+    discount: totals.totalDiscount,
+    taxableAmount: totals.subtotal,
+    cgst: stay.isInterState ? 0 : roundToTwo(totals.totalGST / 2),
+    sgst: stay.isInterState ? 0 : roundToTwo(totals.totalGST / 2),
+    igst: stay.isInterState ? totals.totalGST : 0,
+    totalGST: totals.totalGST,
+    isInterState: !!stay.isInterState,
     summary,
     advanceDetails,
+    advanceReceiptDetails: advanceDetails,
     taxSummary,
-    authorizedBy: settings.authorizedByName || settings.hotelName,
+    authorizedBy: settings.authorizedByName || 'RELAX RESTO INN',
     verifiedBy: settings.verifiedByName || 'FRONT DESK ADMIN',
-    guestSignatureName: stay.guestName,
-    guestSignaturePlace: 'VISAKHAPATNAM',
+    guestSignatureName: stay.companyName || stay.guestName,
+    guestSignaturePlace: settings.placeOfSupply || 'VISAKHAPATNAM-530016',
     notes: notes || stay.notes || '',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -252,14 +259,11 @@ export async function createCheckoutBill(params: {
     numberOfDays,
     extraCharges,
     discount,
-    subtotal: totalValue,
-    taxableAmount,
-    cgst,
-    sgst,
-    igst,
-    totalGST,
-    grossTotal,
-    balanceDue: balance,
+    subtotal: totals.subtotal,
+    taxableAmount: totals.subtotal,
+    totalGST: totals.totalGST,
+    grossTotal: totals.grossTotal,
+    balanceDue: totals.balance,
     updatedAt: serverTimestamp(),
   });
 
@@ -286,7 +290,7 @@ export async function createCheckoutBill(params: {
   // 5. Update Guest totalSpent
   await saveOrUpdateGuest({
     guestId: stay.guestId,
-    totalSpent: grossTotal,
+    totalSpent: totals.grossTotal,
     lastStayDate: billDate,
   });
 
@@ -296,7 +300,7 @@ export async function createCheckoutBill(params: {
     userEmail,
     entityType: 'stay',
     entityId: stay.stayId,
-    description: `Checkout completed for ${stay.guestName} (Room ${stay.roomNumber}). Invoice generated: ${billNo} (Gross: ₹${grossTotal})`,
+    description: `Checkout completed for ${stay.guestName} (Room ${stay.roomNumber}). Invoice generated: ${billNo} (Gross: ₹${totals.grossTotal})`,
   });
 
   await logActivity({
@@ -316,10 +320,34 @@ export async function createManualBill(manualBillData: Partial<Bill>, userEmail 
   const billNo = manualBillData.billNo?.trim() || (await getNextInvoiceNumber());
   
   const billDate = manualBillData.billDate || getTodayDateString();
-  const grossTotal = roundToTwo(manualBillData.grossTotal || 0);
-  const advance = roundToTwo(manualBillData.advance || 0);
-  const balance = roundToTwo(manualBillData.balance !== undefined ? manualBillData.balance : (grossTotal - advance));
-  const amountInWords = manualBillData.amountInWords || convertAmountToWords(grossTotal);
+  const billTime = manualBillData.billTime || getCurrentTimeString();
+
+  // Clean and prepare line items
+  const rawItems = manualBillData.lineItems && manualBillData.lineItems.length > 0
+    ? manualBillData.lineItems
+    : [
+        {
+          id: 'li-1',
+          date: manualBillData.checkInDate || billDate,
+          roomDetails: manualBillData.roomDetails || `${manualBillData.roomNumber || '309'}-${(manualBillData.roomType || 'SUIT ROOM').toUpperCase()}`,
+          description: 'TARIFF',
+          rate: manualBillData.subtotal || 1785.71,
+          numberOfDays: manualBillData.numberOfDays || 1,
+          value: manualBillData.subtotal || 1785.71,
+          discount: manualBillData.discount || 0,
+          total: manualBillData.taxableAmount || 1785.71,
+          gstRate: 12,
+          gstAmount: roundToTwo((1785.71 * 12) / 100),
+          netTotal: roundToTwo(1785.71 * 1.12),
+        }
+      ];
+
+  const lineItems = rawItems.map(calculateLineItem);
+  const totalAdvance = roundToTwo(manualBillData.advance || 0);
+  const totals = computeBillTotals(lineItems, totalAdvance, manualBillData.roundingAmount);
+  const taxSummary = (manualBillData.taxSummary && manualBillData.taxSummary.length > 0)
+    ? manualBillData.taxSummary
+    : computeTaxSummary(lineItems, manualBillData.isInterState);
 
   // Save guest profile if guestName and phone exist
   let savedGuestId = manualBillData.guestId;
@@ -330,65 +358,92 @@ export async function createManualBill(manualBillData: Partial<Bill>, userEmail 
       address: manualBillData.guestAddress || '',
       idNumber: manualBillData.idCardNumber || '',
       idType: (manualBillData.idCardType as any) || 'Aadhaar Card',
-      companyName: manualBillData.companyDetails || '',
+      companyName: manualBillData.companyDetails || manualBillData.companyName || '',
       companyGSTIN: manualBillData.companyGSTIN || '',
       totalStays: 1,
-      totalSpent: grossTotal,
+      totalSpent: totals.grossTotal,
     });
     savedGuestId = saved.guestId;
   }
+
+  const adultCount = manualBillData.paxAdult !== undefined ? manualBillData.paxAdult : 1;
+  const childCount = manualBillData.paxChild !== undefined ? manualBillData.paxChild : 0;
+  const paxText = manualBillData.pax || `(Adult : ${adultCount}, Child : ${childCount})`;
+
+  const roomDetailsStr = manualBillData.roomDetails || `${manualBillData.roomNumber || '309'}-${(manualBillData.roomType || 'SUIT ROOM').toUpperCase()}${manualBillData.planType ? ` ( Plan Type : ${manualBillData.planType} )` : ''}`;
+
+  const advanceDetails = manualBillData.advanceReceiptDetails || manualBillData.advanceDetails || (totalAdvance > 0 ? [{
+    date: billDate,
+    description: manualBillData.paymentType ? `Bank ( ${manualBillData.paymentType} )` : 'Wallet',
+    desc: manualBillData.paymentType ? `Bank ( ${manualBillData.paymentType} )` : 'Wallet',
+    refNo: manualBillData.bookingId || manualBillData.grcNumber || `A-R-${manualBillData.roomNumber || '309'}-01`,
+    roomDetails: manualBillData.roomNumber || '309',
+    room: manualBillData.roomNumber || '309',
+    amount: totalAdvance,
+    paymentType: manualBillData.paymentType as any || 'Wallet',
+  }] : []);
 
   const fullBill: Bill = {
     billId,
     billNo,
     billDate,
-    billTime: manualBillData.billTime || getCurrentTimeString(),
+    billTime,
     billType: 'manual',
-    status: balance <= 0 ? 'paid' : (advance > 0 ? 'partially_paid' : 'pending'),
+    status: totals.balance <= 0 ? 'paid' : (totalAdvance > 0 ? 'partially_paid' : 'pending'),
     guestId: savedGuestId,
     guestName: manualBillData.guestName || 'Guest',
     guestPhone: manualBillData.guestPhone || '',
     guestAddress: manualBillData.guestAddress || '',
+    guestEmail: manualBillData.guestEmail || '',
+    paxAdult: adultCount,
+    paxChild: childCount,
+    pax: paxText,
     idCardNumber: manualBillData.idCardNumber || '',
-    idCardType: manualBillData.idCardType || 'Aadhaar Card',
-    pax: manualBillData.pax || '1 Adult',
-    companyDetails: manualBillData.companyDetails || '',
+    idCardType: manualBillData.idCardType || 'Voter ID',
+    companyName: manualBillData.companyName || manualBillData.companyDetails || '',
+    companyAddress: manualBillData.companyAddress || '',
+    companyDetails: manualBillData.companyDetails || manualBillData.companyName || '',
     companyGSTIN: manualBillData.companyGSTIN || '',
     refOTA: manualBillData.refOTA || '',
     refOTAGSTIN: manualBillData.refOTAGSTIN || '',
-    stateCode: manualBillData.stateCode || settings.stateCode || '37',
-    placeOfSupply: manualBillData.placeOfSupply || settings.placeOfSupply || 'ANDHRA PRADESH (37)',
-    roomNumber: manualBillData.roomNumber || '101',
-    roomDetails: manualBillData.roomDetails || `TARIFF (${manualBillData.roomNumber || '101'}-${(manualBillData.roomType || 'ROOM').toUpperCase()})`,
-    roomType: manualBillData.roomType || 'Deluxe Room',
-    planType: manualBillData.planType || 'EP',
+    stateCode: manualBillData.stateCode || settings.stateCode || '28',
+    placeOfSupply: manualBillData.placeOfSupply || settings.placeOfSupply || 'VISAKHAPATNAM-530016',
+    roomNumber: manualBillData.roomNumber || '309',
+    roomDetails: roomDetailsStr,
+    roomType: manualBillData.roomType || 'SUIT ROOM',
+    planType: manualBillData.planType || 'CP',
     checkInDate: manualBillData.checkInDate || billDate,
     checkInTime: manualBillData.checkInTime || settings.defaultCheckInTime || '12:00',
     checkOutDate: manualBillData.checkOutDate || billDate,
     checkOutTime: manualBillData.checkOutTime || settings.defaultCheckOutTime || '11:00',
     bookingId: manualBillData.bookingId || '',
+    reservationId: manualBillData.reservationId || manualBillData.bookingId || '',
     grcNumber: manualBillData.grcNumber || '',
-    paymentType: manualBillData.paymentType || 'Cash',
+    paymentType: manualBillData.paymentType || 'Wallet',
     numberOfDays: manualBillData.numberOfDays || 1,
-    lineItems: manualBillData.lineItems || [],
-    subtotal: manualBillData.subtotal || grossTotal,
-    discount: manualBillData.discount || 0,
-    taxableAmount: manualBillData.taxableAmount || grossTotal,
-    cgst: manualBillData.cgst || 0,
-    sgst: manualBillData.sgst || 0,
-    igst: manualBillData.igst || 0,
-    totalGST: manualBillData.totalGST || 0,
-    grossTotal,
-    advance,
-    balance,
-    amountInWords,
-    summary: manualBillData.summary || [{ accountName: 'TARIFF', amount: manualBillData.subtotal || grossTotal }],
-    advanceDetails: manualBillData.advanceDetails || (advance > 0 ? [{ date: billDate, desc: `ADVANCE (${manualBillData.paymentType || 'Cash'})`, refNo: 'MANUAL-01', room: manualBillData.roomNumber || '', amount: advance }] : []),
-    taxSummary: manualBillData.taxSummary || [],
-    authorizedBy: manualBillData.authorizedBy || settings.authorizedByName || settings.hotelName,
+    lineItems,
+    subtotal: totals.subtotal,
+    roundingAmount: totals.roundingAmount,
+    grossTotalBeforeRounding: totals.grossTotalBeforeRounding,
+    grossTotal: totals.grossTotal,
+    advance: totalAdvance,
+    balance: totals.balance,
+    amountInWords: totals.amountInWords,
+    discount: totals.totalDiscount,
+    taxableAmount: totals.subtotal,
+    cgst: manualBillData.isInterState ? 0 : roundToTwo(totals.totalGST / 2),
+    sgst: manualBillData.isInterState ? 0 : roundToTwo(totals.totalGST / 2),
+    igst: manualBillData.isInterState ? totals.totalGST : 0,
+    totalGST: totals.totalGST,
+    isInterState: !!manualBillData.isInterState,
+    summary: manualBillData.summary || [{ accountName: 'TARIFF', amount: totals.subtotal }],
+    advanceDetails,
+    advanceReceiptDetails: advanceDetails,
+    taxSummary,
+    authorizedBy: manualBillData.authorizedBy || settings.authorizedByName || 'RELAX RESTO INN',
     verifiedBy: manualBillData.verifiedBy || settings.verifiedByName || 'FRONT DESK ADMIN',
-    guestSignatureName: manualBillData.guestSignatureName || manualBillData.guestName || '',
-    guestSignaturePlace: manualBillData.guestSignaturePlace || 'VISAKHAPATNAM',
+    guestSignatureName: manualBillData.guestSignatureName || manualBillData.companyDetails || manualBillData.companyName || manualBillData.guestName || '',
+    guestSignaturePlace: manualBillData.guestSignaturePlace || settings.placeOfSupply || 'VISAKHAPATNAM-530016',
     notes: manualBillData.notes || '',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -405,14 +460,14 @@ export async function createManualBill(manualBillData: Partial<Bill>, userEmail 
     // Handled via local fallback
   }
 
-  if (advance > 0) {
+  if (totalAdvance > 0) {
     await recordPayment({
       billId,
       billNo,
       guestName: fullBill.guestName,
       roomNumber: fullBill.roomNumber,
-      amount: advance,
-      paymentType: (fullBill.paymentType as any) || 'Cash',
+      amount: totalAdvance,
+      paymentType: (fullBill.paymentType as any) || 'Wallet',
       referenceNumber: 'MANUAL-PAY',
       paymentDate: billDate,
       notes: `Manual entry payment for Bill ${billNo}`,
@@ -424,11 +479,12 @@ export async function createManualBill(manualBillData: Partial<Bill>, userEmail 
     userEmail,
     entityType: 'bill',
     entityId: billId,
-    description: `Manual / Old Tax Invoice ${billNo} added for ${fullBill.guestName} (Amount: ₹${grossTotal})`,
+    description: `Manual / Old Tax Invoice ${billNo} added for ${fullBill.guestName} (Amount: ₹${totals.grossTotal})`,
   });
 
   return fullBill;
 }
+
 
 export async function getBills(maxLimit = 100): Promise<Bill[]> {
   try {
