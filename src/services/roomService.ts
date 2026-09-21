@@ -24,40 +24,40 @@ export const OFFICIAL_ROOM_INVENTORY: {
   defaultTariff: number;
   defaultPlan: PlanType;
 }[] = [
-  // 1ST FLOOR (5 Rooms)
+  // 1ST FLOOR (5 Rooms - Executive Rooms)
   { roomNumber: '101', floor: '1st Floor', defaultType: 'Executive Room', defaultTariff: 1500, defaultPlan: 'EP' },
   { roomNumber: '102', floor: '1st Floor', defaultType: 'Executive Room', defaultTariff: 1500, defaultPlan: 'EP' },
   { roomNumber: '103', floor: '1st Floor', defaultType: 'Executive Room', defaultTariff: 1500, defaultPlan: 'EP' },
   { roomNumber: '104', floor: '1st Floor', defaultType: 'Executive Room', defaultTariff: 1500, defaultPlan: 'EP' },
   { roomNumber: '105', floor: '1st Floor', defaultType: 'Executive Room', defaultTariff: 1500, defaultPlan: 'EP' },
 
-  // 2ND FLOOR (10 Rooms)
-  { roomNumber: '201', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
-  { roomNumber: '202', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
-  { roomNumber: '203', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
-  { roomNumber: '204', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
-  { roomNumber: '205', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
-  { roomNumber: '206', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
-  { roomNumber: '207', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
-  { roomNumber: '208', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
-  { roomNumber: '209', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
-  { roomNumber: '210', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  // 2ND FLOOR (10 Rooms - Executive Rooms)
+  { roomNumber: '201', floor: '2nd Floor', defaultType: 'Executive Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '202', floor: '2nd Floor', defaultType: 'Executive Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '203', floor: '2nd Floor', defaultType: 'Executive Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '204', floor: '2nd Floor', defaultType: 'Executive Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '205', floor: '2nd Floor', defaultType: 'Executive Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '206', floor: '2nd Floor', defaultType: 'Executive Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '207', floor: '2nd Floor', defaultType: 'Executive Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '208', floor: '2nd Floor', defaultType: 'Executive Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '209', floor: '2nd Floor', defaultType: 'Executive Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '210', floor: '2nd Floor', defaultType: 'Executive Room', defaultTariff: 1800, defaultPlan: 'EP' },
 
-  // 3RD FLOOR (9 Rooms)
-  { roomNumber: '301', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
-  { roomNumber: '302', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
-  { roomNumber: '303', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
-  { roomNumber: '304', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
-  { roomNumber: '305', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
-  { roomNumber: '306', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
-  { roomNumber: '307', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
-  { roomNumber: '308', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
-  { roomNumber: '309', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
+  // 3RD FLOOR (9 Rooms - 301 to 308 Executive Rooms, 309 Suite Room)
+  { roomNumber: '301', floor: '3rd Floor', defaultType: 'Executive Room', defaultTariff: 2000, defaultPlan: 'EP' },
+  { roomNumber: '302', floor: '3rd Floor', defaultType: 'Executive Room', defaultTariff: 2000, defaultPlan: 'EP' },
+  { roomNumber: '303', floor: '3rd Floor', defaultType: 'Executive Room', defaultTariff: 2000, defaultPlan: 'EP' },
+  { roomNumber: '304', floor: '3rd Floor', defaultType: 'Executive Room', defaultTariff: 2000, defaultPlan: 'EP' },
+  { roomNumber: '305', floor: '3rd Floor', defaultType: 'Executive Room', defaultTariff: 2000, defaultPlan: 'EP' },
+  { roomNumber: '306', floor: '3rd Floor', defaultType: 'Executive Room', defaultTariff: 2000, defaultPlan: 'EP' },
+  { roomNumber: '307', floor: '3rd Floor', defaultType: 'Executive Room', defaultTariff: 2000, defaultPlan: 'EP' },
+  { roomNumber: '308', floor: '3rd Floor', defaultType: 'Executive Room', defaultTariff: 2000, defaultPlan: 'EP' },
+  { roomNumber: '309', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2500, defaultPlan: 'CP' },
 ];
 
 /**
  * Ensures the exact 24 rooms exist in Firestore in a non-destructive manner.
- * Preserves all existing room settings (tariff, roomType, status, current guests).
+ * Preserves all existing room settings (tariff, status, current guests, stays).
  */
 export async function syncOfficialInventory(existingRooms: Room[]): Promise<Room[]> {
   const existingMap = new Map<string, Room>();
@@ -75,8 +75,21 @@ export async function syncOfficialInventory(existingRooms: Room[]): Promise<Room
       const merged: Room = {
         ...existing,
         floor: item.floor,
+        roomType: item.defaultType,
       };
       updatedRooms.push(merged);
+
+      if (existing.roomType !== item.defaultType) {
+        try {
+          const roomRef = doc(db, ROOMS_COLLECTION, existing.roomId);
+          updateDoc(roomRef, {
+            roomType: item.defaultType,
+            updatedAt: serverTimestamp(),
+          }).catch(() => {});
+        } catch (e) {
+          // Non-blocking
+        }
+      }
     } else {
       const newRoomId = `room-${item.roomNumber}`;
       const newRoom: Room = {
@@ -84,14 +97,16 @@ export async function syncOfficialInventory(existingRooms: Room[]): Promise<Room
         roomNumber: item.roomNumber,
         roomType: item.defaultType,
         floor: item.floor,
-        capacityAdults: 2,
-        capacityChildren: 1,
-        maxAdults: 3,
+        capacityAdults: item.roomNumber === '309' ? 3 : 2,
+        capacityChildren: item.roomNumber === '309' ? 2 : 1,
+        maxAdults: item.roomNumber === '309' ? 4 : 3,
         maxChildren: 2,
         planType: item.defaultPlan,
         tariff: item.defaultTariff,
         status: 'Available',
-        amenities: ['Air Conditioning', 'LED TV', 'Free Wi-Fi', 'Attached Bathroom'],
+        amenities: item.roomNumber === '309' 
+          ? ['Air Conditioning', 'LED Smart TV', 'High-Speed Wi-Fi', 'Attached Luxury Bathroom', 'Living Area', 'Mini Refrigerator', 'Tea/Coffee Maker']
+          : ['Air Conditioning', 'LED TV', 'Free Wi-Fi', 'Attached Bathroom', 'Hot Water Geyser'],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -207,7 +222,7 @@ export async function createRoom(roomData: Partial<Room>, userEmail = 'admin'): 
   const fullRoom: Room = {
     roomId,
     roomNumber: roomData.roomNumber || '101',
-    roomType: roomData.roomType || 'Deluxe Room',
+    roomType: roomData.roomType || 'Executive Room',
     floor: roomData.floor || '1st Floor',
     capacityAdults: roomData.capacityAdults || 2,
     capacityChildren: roomData.capacityChildren || 1,

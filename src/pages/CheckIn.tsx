@@ -81,7 +81,7 @@ export const CheckIn: React.FC<CheckInProps> = ({
 
   const [selectedRoomId, setSelectedRoomId] = useState('');
   const [selectedRoomNumber, setSelectedRoomNumber] = useState('');
-  const [roomType, setRoomType] = useState('Deluxe Room');
+  const [roomType, setRoomType] = useState('Executive Room');
   const [planType, setPlanType] = useState<PlanType>('EP');
   
   const [checkInDate, setCheckInDate] = useState(today);

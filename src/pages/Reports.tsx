@@ -490,22 +490,22 @@ export const Reports: React.FC<ReportsProps> = ({ settings }) => {
               <div className="space-y-3">
                 <div className="flex justify-between items-center p-2.5 rounded-xl border border-stone-200 bg-white">
                   <span className="text-xs font-bold text-stone-800">1st Floor Executive Rooms (101 - 105)</span>
-                  <span className="text-xs font-mono font-bold text-stone-900">5 Rooms</span>
+                  <span className="text-xs font-mono font-bold text-stone-900">5 Rooms (Executive)</span>
                 </div>
 
                 <div className="flex justify-between items-center p-2.5 rounded-xl border border-stone-200 bg-white">
-                  <span className="text-xs font-bold text-stone-800">2nd Floor Deluxe Rooms (201 - 210)</span>
-                  <span className="text-xs font-mono font-bold text-stone-900">10 Rooms</span>
+                  <span className="text-xs font-bold text-stone-800">2nd Floor Executive Rooms (201 - 210)</span>
+                  <span className="text-xs font-mono font-bold text-stone-900">10 Rooms (Executive)</span>
                 </div>
 
                 <div className="flex justify-between items-center p-2.5 rounded-xl border border-stone-200 bg-white">
-                  <span className="text-xs font-bold text-stone-800">3rd Floor Suite Rooms (301 - 309)</span>
-                  <span className="text-xs font-mono font-bold text-stone-900">9 Rooms</span>
+                  <span className="text-xs font-bold text-stone-800">3rd Floor Rooms (301 - 309)</span>
+                  <span className="text-xs font-mono font-bold text-stone-900">8 Executive + 1 Suite (309)</span>
                 </div>
 
                 <div className="flex justify-between items-center p-3 rounded-xl bg-stone-900 text-white font-bold">
-                  <span className="text-xs text-amber-300">Total Official Capacity</span>
-                  <span className="text-sm font-mono text-amber-300">24 Rooms</span>
+                  <span className="text-xs text-amber-300">Total Hotel Capacity</span>
+                  <span className="text-sm font-mono text-amber-300">24 Rooms (23 Executive • 1 Suite)</span>
                 </div>
               </div>
             </div>
