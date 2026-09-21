@@ -16,14 +16,16 @@ import {
   RefreshCw,
   Sparkles,
   CreditCard,
-  FileText
+  FileText,
+  BookmarkCheck
 } from 'lucide-react';
-import { Bill, Room, Stay, HotelSettings, Payment, ActivityLog } from '../types';
+import { Bill, Room, Stay, HotelSettings, Payment, ActivityLog, Reservation } from '../types';
 import { getRooms } from '../services/roomService';
 import { getActiveStays } from '../services/stayService';
 import { getBills } from '../services/billService';
 import { getAllPayments } from '../services/paymentService';
 import { getRecentActivities } from '../services/activityService';
+import { getReservations } from '../services/reservationService';
 import { formatINR } from '../utils/currency';
 import { formatDateForDisplay, getTodayDateString, formatTime12H } from '../utils/date';
 
@@ -44,18 +46,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [recentBills, setRecentBills] = useState<Bill[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [activities, setActivities] = useState<ActivityLog[]>([]);
+  const [reservations, setReservations] = useState<Reservation[]>([]);
 
   const todayStr = getTodayDateString();
 
   const loadDashboardData = async () => {
     try {
       setLoading(true);
-      const [roomsData, staysData, billsData, paymentsData, activitiesData] = await Promise.all([
+      const [roomsData, staysData, billsData, paymentsData, activitiesData, resData] = await Promise.all([
         getRooms(),
         getActiveStays(),
         getBills(20),
         getAllPayments(100),
         getRecentActivities(10),
+        getReservations(),
       ]);
 
       setRooms(roomsData);
@@ -63,6 +67,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       setRecentBills(billsData);
       setPayments(paymentsData);
       setActivities(activitiesData);
+      setReservations(resData);
     } catch (error) {
       console.error('Failed to load dashboard data:', error);
     } finally {
@@ -74,12 +79,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
     loadDashboardData();
   }, []);
 
-  // Compute metrics
+  // Compute metrics purely from Firestore data
+  const totalRoomsCount = rooms.length;
   const availableRoomsCount = rooms.filter(r => r.status === 'Available').length;
   const occupiedRoomsCount = rooms.filter(r => r.status === 'Occupied').length;
+  const reservedRoomsCount = rooms.filter(r => r.status === 'Reserved').length;
   
   const todayCheckIns = activeStays.filter(s => s.checkInDate === todayStr).length;
   const todayExpectedCheckOuts = activeStays.filter(s => s.expectedCheckOutDate === todayStr).length;
+
+  const upcomingReservations = reservations.filter(r => r.status === 'CONFIRMED' || r.status === 'PENDING');
 
   const todayRevenue = payments
     .filter(p => p.paymentDate === todayStr)
@@ -116,7 +125,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
           <div className="flex flex-wrap gap-2.5">
             <button
-              onClick={() => onNavigate('checkin')}
+              onClick={() => onNavigate('checkin', { tab: 'walkin' })}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-red-600 via-orange-600 to-amber-600 hover:from-red-700 hover:to-amber-700 text-white text-xs font-bold shadow-lg shadow-orange-950/50 transition-all cursor-pointer"
             >
               <UserPlus className="w-4 h-4" />
@@ -124,10 +133,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </button>
 
             <button
-              onClick={() => onNavigate('manual_bill')}
+              onClick={() => onNavigate('checkin', { tab: 'new_reservation' })}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-amber-300 text-xs font-bold border border-amber-500/30 transition-all cursor-pointer"
             >
-              <FileText className="w-4 h-4 text-amber-400" />
+              <BookmarkCheck className="w-4 h-4 text-amber-400" />
+              <span>New Reservation</span>
+            </button>
+
+            <button
+              onClick={() => onNavigate('manual_bill')}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-bold border border-stone-700 transition-all cursor-pointer"
+            >
+              <FileText className="w-4 h-4 text-stone-400" />
               <span>Manual Bill</span>
             </button>
 
@@ -188,7 +205,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         {/* Available Rooms */}
-        <div className="bg-[#FFFDF9] p-4 rounded-2xl border border-amber-200/80 shadow-xs hover:border-emerald-300 transition-all">
+        <div 
+          onClick={() => onNavigate('rooms')}
+          className="bg-[#FFFDF9] p-4 rounded-2xl border border-amber-200/80 shadow-xs hover:border-emerald-300 transition-all cursor-pointer"
+        >
           <div className="flex justify-between items-start">
             <span className="text-[11px] font-bold text-stone-600 uppercase tracking-wider">Available Rooms</span>
             <div className="p-2 rounded-xl bg-emerald-100 text-emerald-800">
@@ -196,13 +216,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
           </div>
           <div className="mt-2 text-2xl font-black text-emerald-700 font-['Outfit',sans-serif]">
-            {availableRoomsCount} <span className="text-xs text-stone-500 font-normal">/ {rooms.length}</span>
+            {availableRoomsCount} <span className="text-xs text-stone-500 font-normal">/ {totalRoomsCount}</span>
           </div>
           <p className="text-[11px] text-emerald-800 font-medium mt-0.5">Ready for check-in</p>
         </div>
 
         {/* Occupied Rooms */}
-        <div className="bg-[#FFFDF9] p-4 rounded-2xl border border-amber-200/80 shadow-xs hover:border-orange-300 transition-all">
+        <div 
+          onClick={() => onNavigate('rooms')}
+          className="bg-[#FFFDF9] p-4 rounded-2xl border border-amber-200/80 shadow-xs hover:border-orange-300 transition-all cursor-pointer"
+        >
           <div className="flex justify-between items-start">
             <span className="text-[11px] font-bold text-stone-600 uppercase tracking-wider">Occupied Rooms</span>
             <div className="p-2 rounded-xl bg-amber-100 text-amber-700">
@@ -213,7 +236,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             {occupiedRoomsCount}
           </div>
           <p className="text-[11px] text-stone-600 font-medium mt-0.5">
-            {rooms.length > 0 ? `${Math.round((occupiedRoomsCount / rooms.length) * 100)}% occupancy` : '0%'}
+            {totalRoomsCount > 0 ? `${Math.round((occupiedRoomsCount / totalRoomsCount) * 100)}% occupancy` : '0%'}
           </p>
         </div>
 
@@ -245,18 +268,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
           <p className="text-[11px] text-rose-800 font-medium mt-0.5">From active stays</p>
         </div>
 
-        {/* Total Invoices */}
-        <div className="bg-[#FFFDF9] p-4 rounded-2xl border border-amber-200/80 shadow-xs hover:border-orange-300 transition-all">
+        {/* Active Reservations */}
+        <div 
+          onClick={() => onNavigate('checkin', { tab: 'from_reservation' })}
+          className="bg-[#FFFDF9] p-4 rounded-2xl border border-amber-200/80 shadow-xs hover:border-blue-300 transition-all cursor-pointer"
+        >
           <div className="flex justify-between items-start">
-            <span className="text-[11px] font-bold text-stone-600 uppercase tracking-wider">Total Bills</span>
-            <div className="p-2 rounded-xl bg-stone-100 text-stone-700">
-              <Receipt className="w-4 h-4" />
+            <span className="text-[11px] font-bold text-stone-600 uppercase tracking-wider">Reservations</span>
+            <div className="p-2 rounded-xl bg-blue-100 text-blue-700">
+              <BookmarkCheck className="w-4 h-4" />
             </div>
           </div>
-          <div className="mt-2 text-2xl font-black text-stone-900 font-['Outfit',sans-serif]">
-            {totalBillsCount}
+          <div className="mt-2 text-2xl font-black text-blue-900 font-['Outfit',sans-serif]">
+            {upcomingReservations.length}
           </div>
-          <p className="text-[11px] text-stone-600 font-medium mt-0.5">Stored Tax Invoices</p>
+          <p className="text-[11px] text-blue-800 font-medium mt-0.5">Confirmed upcoming bookings</p>
         </div>
       </div>
 
@@ -287,10 +313,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <p className="text-sm font-semibold text-stone-700">No active stays right now.</p>
               <p className="text-xs text-stone-500 mt-0.5">Click + New Check-in to register arriving guests.</p>
               <button
-                onClick={() => onNavigate('checkin')}
+                onClick={() => onNavigate('checkin', { tab: 'walkin' })}
                 className="mt-3 px-4 py-1.5 bg-gradient-to-r from-red-600 via-orange-600 to-amber-600 text-white rounded-lg text-xs font-bold cursor-pointer"
               >
-                + New Check-in
+                + New Walk-in Check-in
               </button>
             </div>
           ) : (
@@ -359,12 +385,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </h2>
             <div className="grid grid-cols-2 gap-2 text-xs">
               <button
-                onClick={() => onNavigate('checkin')}
+                onClick={() => onNavigate('checkin', { tab: 'walkin' })}
                 className="p-3 rounded-xl bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-200 text-left hover:border-orange-400 transition-all cursor-pointer group"
               >
                 <UserPlus className="w-4 h-4 text-orange-600 mb-1 group-hover:scale-110 transition-transform" />
                 <div className="font-bold text-stone-900">Check-in</div>
                 <div className="text-[10px] text-stone-500">Register arrival</div>
+              </button>
+
+              <button
+                onClick={() => onNavigate('checkin', { tab: 'new_reservation' })}
+                className="p-3 rounded-xl bg-gradient-to-br from-blue-50 to-amber-50 border border-blue-200 text-left hover:border-blue-400 transition-all cursor-pointer group"
+              >
+                <BookmarkCheck className="w-4 h-4 text-blue-600 mb-1 group-hover:scale-110 transition-transform" />
+                <div className="font-bold text-stone-900">Reservation</div>
+                <div className="text-[10px] text-stone-500">Future booking</div>
               </button>
 
               <button
@@ -377,21 +412,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </button>
 
               <button
-                onClick={() => onNavigate('manual_bill')}
-                className="p-3 rounded-xl bg-gradient-to-br from-amber-50 to-yellow-50 border border-amber-200 text-left hover:border-amber-400 transition-all cursor-pointer group"
-              >
-                <Receipt className="w-4 h-4 text-amber-700 mb-1 group-hover:scale-110 transition-transform" />
-                <div className="font-bold text-stone-900">Manual Bill</div>
-                <div className="text-[10px] text-stone-500">Add old invoice</div>
-              </button>
-
-              <button
                 onClick={() => onNavigate('calendar')}
                 className="p-3 rounded-xl bg-gradient-to-br from-stone-50 to-amber-50/40 border border-stone-200 text-left hover:border-amber-400 transition-all cursor-pointer group"
               >
                 <CalendarDays className="w-4 h-4 text-stone-700 mb-1 group-hover:scale-110 transition-transform" />
                 <div className="font-bold text-stone-900">Calendar</div>
-                <div className="text-[10px] text-stone-500">Monthly schedule</div>
+                <div className="text-[10px] text-stone-500">Room schedule</div>
               </button>
             </div>
           </div>
@@ -448,47 +474,49 @@ export const Dashboard: React.FC<DashboardProps> = ({
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-left">
-              <thead className="bg-stone-100 text-stone-700 font-bold uppercase text-[10px] tracking-wider border-b border-stone-200">
+              <thead className="bg-amber-50/60 text-stone-700 font-bold uppercase text-[10px] tracking-wider border-b border-amber-200">
                 <tr>
-                  <th className="p-2.5">Bill No</th>
+                  <th className="p-2.5">Invoice No</th>
                   <th className="p-2.5">Date</th>
-                  <th className="p-2.5">Guest</th>
+                  <th className="p-2.5">Guest Name</th>
                   <th className="p-2.5">Room</th>
-                  <th className="p-2.5 text-right">Taxable</th>
-                  <th className="p-2.5 text-right">GST</th>
-                  <th className="p-2.5 text-right">Gross Total</th>
-                  <th className="p-2.5 text-center">Status</th>
-                  <th className="p-2.5 text-center">Invoice</th>
+                  <th className="p-2.5 text-right">Taxable (₹)</th>
+                  <th className="p-2.5 text-right">GST (₹)</th>
+                  <th className="p-2.5 text-right">Gross Total (₹)</th>
+                  <th className="p-2.5 text-center">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-stone-100 font-sans">
-                {recentBills.slice(0, 5).map((bill) => (
+              <tbody className="divide-y divide-amber-100">
+                {recentBills.map((bill) => (
                   <tr key={bill.billId} className="hover:bg-amber-50/40 transition-colors">
-                    <td className="p-2.5 font-bold font-mono text-stone-900">{bill.billNo}</td>
-                    <td className="p-2.5 text-stone-600">{formatDateForDisplay(bill.billDate)}</td>
-                    <td className="p-2.5 font-semibold text-stone-900 uppercase">{bill.guestName}</td>
-                    <td className="p-2.5 text-stone-700">{bill.roomNumber}</td>
-                    <td className="p-2.5 text-right font-mono">{formatINR(bill.taxableAmount)}</td>
-                    <td className="p-2.5 text-right font-mono">{formatINR(bill.totalGST)}</td>
-                    <td className="p-2.5 text-right font-mono font-bold text-stone-950">{formatINR(bill.grossTotal)}</td>
-                    <td className="p-2.5 text-center">
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-                        bill.status === 'paid' 
-                          ? 'bg-emerald-100 text-emerald-800' 
-                          : bill.status === 'void'
-                          ? 'bg-red-100 text-red-800'
-                          : 'bg-amber-100 text-amber-800'
-                      }`}>
-                        {bill.status.toUpperCase()}
-                      </span>
+                    <td className="p-2.5 font-bold font-mono text-orange-900">
+                      {bill.billNo}
+                    </td>
+                    <td className="p-2.5 text-stone-700 font-mono">
+                      {formatDateForDisplay(bill.billDate)}
+                    </td>
+                    <td className="p-2.5 font-bold text-stone-900">
+                      {bill.guestName}
+                    </td>
+                    <td className="p-2.5 font-mono">
+                      {bill.roomNumber}
+                    </td>
+                    <td className="p-2.5 text-right font-mono text-stone-700">
+                      {formatINR(bill.taxableAmount)}
+                    </td>
+                    <td className="p-2.5 text-right font-mono text-stone-700">
+                      {formatINR(bill.totalGST)}
+                    </td>
+                    <td className="p-2.5 text-right font-mono font-black text-stone-950">
+                      {formatINR(bill.grossTotal)}
                     </td>
                     <td className="p-2.5 text-center">
                       <button
                         onClick={() => onViewBill(bill)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-stone-900 hover:bg-stone-800 text-amber-300 rounded-md text-[11px] font-semibold transition-colors cursor-pointer"
+                        className="px-2.5 py-1 bg-stone-900 hover:bg-stone-800 text-amber-300 rounded-md text-[11px] font-bold shadow-xs cursor-pointer inline-flex items-center gap-1"
                       >
-                        <Eye className="w-3 h-3 text-amber-400" />
-                        <span>View</span>
+                        <Eye className="w-3 h-3" />
+                        <span>View Bill</span>
                       </button>
                     </td>
                   </tr>

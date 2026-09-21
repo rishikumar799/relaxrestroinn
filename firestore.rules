@@ -22,6 +22,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // reservations/{reservationId}
+    match /reservations/{reservationId} {
+      allow read, write: if true;
+    }
+
     // stays/{stayId}
     match /stays/{stayId} {
       allow read, write: if true;

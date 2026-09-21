@@ -50,6 +50,65 @@ export interface Guest {
 export type RoomStatus = 'Available' | 'Occupied' | 'Reserved' | 'Cleaning' | 'Maintenance' | 'Blocked';
 export type PlanType = 'EP' | 'CP' | 'MAP' | 'AP';
 
+export type ReservationStatus = 'PENDING' | 'CONFIRMED' | 'CHECKED_IN' | 'CHECKED_OUT' | 'CANCELLED' | 'NO_SHOW';
+export type BookingSource = 'Walk-in' | 'Phone' | 'Direct' | 'OTA' | 'Website' | 'Other';
+
+export interface Reservation {
+  reservationId: string;
+  guestId?: string;
+  guestName: string;
+  guestPhone: string;
+  guestEmail?: string;
+  guestAddress?: string;
+  
+  roomId: string;
+  roomNumber: string;
+  roomType: string;
+  floor?: string | number;
+  planType: PlanType;
+  tariff: number;
+  
+  checkInDate: string; // YYYY-MM-DD
+  checkInTime?: string; // HH:mm
+  checkOutDate: string; // YYYY-MM-DD
+  checkOutTime?: string; // HH:mm
+  numberOfDays: number;
+  
+  adults: number;
+  children: number;
+  
+  advanceAmount: number;
+  paymentType?: PaymentMethod | string;
+  bookingSource: BookingSource | string;
+  specialRequests?: string;
+  
+  status: ReservationStatus;
+  
+  // Lifecycle timestamps & actors
+  createdAt?: any;
+  updatedAt?: any;
+  createdBy?: string;
+  updatedBy?: string;
+  
+  confirmedAt?: string;
+  confirmedBy?: string;
+  
+  checkedInAt?: string;
+  checkedInBy?: string;
+  stayId?: string; // linked stay when checked in
+  
+  checkedOutAt?: string;
+  checkedOutBy?: string;
+  billId?: string; // linked bill when checked out
+  
+  cancelledAt?: string;
+  cancelledBy?: string;
+  cancellationReason?: string;
+  
+  noShowAt?: string;
+  noShowBy?: string;
+}
+
 export interface Room {
   roomId: string;
   roomNumber: string;
@@ -66,6 +125,13 @@ export interface Room {
   currentGuestName?: string;
   currentCheckInDate?: string;
   currentExpectedCheckOut?: string;
+  currentReservationId?: string;
+  upcomingReservation?: {
+    reservationId: string;
+    guestName: string;
+    checkInDate: string;
+    checkOutDate: string;
+  };
   amenities?: string[];
   createdAt?: any;
   updatedAt?: any;
@@ -278,15 +344,16 @@ export interface Bill {
 
 export interface Payment {
   paymentId: string;
-  billId: string;
+  billId?: string;
   billNo?: string;
   stayId?: string;
+  reservationId?: string;
   guestId?: string;
   guestName?: string;
   roomNumber?: string;
   amount: number;
-  paymentType: PaymentMethod;
-  paymentMethod?: PaymentMethod;
+  paymentType: PaymentMethod | string;
+  paymentMethod?: PaymentMethod | string;
   paymentTime?: string;
   referenceNumber?: string;
   paymentDate: string;
@@ -296,11 +363,32 @@ export interface Payment {
 
 export interface ActivityLog {
   logId: string;
-  action: 'LOGIN' | 'CHECK_IN_CREATED' | 'CHECKOUT_COMPLETED' | 'BILL_CREATED' | 'BILL_EDITED' | 'PAYMENT_ADDED' | 'MANUAL_BILL_CREATED' | 'BILL_PRINTED' | 'BILL_VOIDED' | 'BILL_DELETED' | 'SETTINGS_UPDATED' | 'ROOM_STATUS_CHANGED' | 'ROOM_ADDED' | 'ROOM_UPDATED';
+  action: 
+    | 'LOGIN' 
+    | 'CHECK_IN_CREATED' 
+    | 'CHECKOUT_COMPLETED' 
+    | 'BILL_CREATED' 
+    | 'BILL_EDITED' 
+    | 'PAYMENT_ADDED' 
+    | 'MANUAL_BILL_CREATED' 
+    | 'BILL_PRINTED' 
+    | 'BILL_VOIDED' 
+    | 'BILL_DELETED' 
+    | 'SETTINGS_UPDATED' 
+    | 'ROOM_STATUS_CHANGED' 
+    | 'ROOM_ADDED' 
+    | 'ROOM_UPDATED'
+    | 'RESERVATION_CREATED'
+    | 'RESERVATION_UPDATED'
+    | 'RESERVATION_CONFIRMED'
+    | 'RESERVATION_CANCELLED'
+    | 'RESERVATION_NO_SHOW'
+    | 'RESERVATION_CHECKED_IN'
+    | 'PAYMENT_CREATED';
   userUid?: string;
   userEmail: string;
   timestamp: any;
-  entityType: 'stay' | 'bill' | 'guest' | 'room' | 'payment' | 'settings' | 'auth';
+  entityType: 'stay' | 'bill' | 'guest' | 'room' | 'payment' | 'settings' | 'auth' | 'reservation';
   entityId: string;
   description: string;
 }

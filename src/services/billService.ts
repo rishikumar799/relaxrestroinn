@@ -28,6 +28,7 @@ import { calculateLineItem, computeTaxSummary, computeBillTotals } from '../util
 
 const BILLS_COLLECTION = 'bills';
 const STAYS_COLLECTION = 'stays';
+const RESERVATIONS_COLLECTION = 'reservations';
 
 export async function createCheckoutBill(params: {
   stay: Stay;
@@ -293,6 +294,33 @@ export async function createCheckoutBill(params: {
     totalSpent: totals.grossTotal,
     lastStayDate: billDate,
   });
+
+  // 5.5 If stay was created from a reservation, update reservation status -> CHECKED_OUT
+  const linkedResId = stay.bookingId || (stay as any).reservationId;
+  if (linkedResId && linkedResId.startsWith('RES-')) {
+    try {
+      const resRef = doc(db, RESERVATIONS_COLLECTION, linkedResId);
+      await updateDoc(resRef, {
+        status: 'CHECKED_OUT',
+        checkedOutAt: new Date().toISOString(),
+        checkedOutBy: userEmail,
+        billId,
+        updatedAt: serverTimestamp(),
+      });
+      const localRes = localFallbackStore.getReservations().find(r => r.reservationId === linkedResId);
+      if (localRes) {
+        localFallbackStore.saveReservation({
+          ...localRes,
+          status: 'CHECKED_OUT',
+          checkedOutAt: new Date().toISOString(),
+          checkedOutBy: userEmail,
+          billId,
+        });
+      }
+    } catch (err) {
+      console.warn('Reservation status update warning on checkout:', err);
+    }
+  }
 
   // 6. Audit Log
   await logActivity({

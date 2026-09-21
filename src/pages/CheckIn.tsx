@@ -11,15 +11,26 @@ import {
   AlertCircle, 
   Search, 
   UserCheck, 
-  ArrowRight,
-  ShieldCheck,
-  Percent
+  ArrowRight, 
+  ShieldCheck, 
+  Percent,
+  BookmarkCheck,
+  CalendarDays,
+  XCircle,
+  Plus
 } from 'lucide-react';
-import { Room, Guest, Stay, HotelSettings, PlanType, PaymentMethod } from '../types';
+import { Room, Guest, Stay, HotelSettings, PlanType, PaymentMethod, Reservation, BookingSource } from '../types';
 import { getRooms } from '../services/roomService';
 import { findGuestByPhone, findGuestByIdNumber, getGuests } from '../services/guestService';
 import { createCheckIn } from '../services/stayService';
-import { getTodayDateString, getCurrentTimeString, calculateDaysBetween } from '../utils/date';
+import { 
+  getReservations, 
+  createReservation, 
+  checkInFromReservation, 
+  findAvailableRooms,
+  cancelReservation 
+} from '../services/reservationService';
+import { getTodayDateString, getCurrentTimeString, calculateDaysBetween, formatDateForDisplay } from '../utils/date';
 import { formatINR, roundToTwo } from '../utils/currency';
 import { useToast } from '../components/common/Toast';
 
@@ -27,20 +38,25 @@ interface CheckInProps {
   settings?: HotelSettings;
   onSuccess: (stay: Stay) => void;
   onCancel: () => void;
+  initialTab?: 'walkin' | 'from_reservation' | 'new_reservation';
+  initialReservationId?: string;
 }
 
 export const CheckIn: React.FC<CheckInProps> = ({
   settings,
   onSuccess,
   onCancel,
+  initialTab = 'walkin',
+  initialReservationId,
 }) => {
   const toast = useToast();
+  const [activeTab, setActiveTab] = useState<'walkin' | 'from_reservation' | 'new_reservation'>(initialTab);
   const [loading, setLoading] = useState(false);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [existingGuests, setExistingGuests] = useState<Guest[]>([]);
-  const [isRepeatGuest, setIsRepeatGuest] = useState(false);
+  const [reservations, setReservations] = useState<Reservation[]>([]);
 
-  // Form State
+  // Walk-in Form State
   const today = getTodayDateString();
   const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
 
@@ -85,36 +101,94 @@ export const CheckIn: React.FC<CheckInProps> = ({
   const [paymentType, setPaymentType] = useState<PaymentMethod>('Cash');
   const [notes, setNotes] = useState('');
 
-  // Load Rooms and Guests
-  useEffect(() => {
-    const loadInitialData = async () => {
-      try {
-        const [roomsList, guestsList] = await Promise.all([
-          getRooms(),
-          getGuests(50)
-        ]);
-        setRooms(roomsList);
-        setExistingGuests(guestsList);
+  // Future Reservation Form State
+  const [resGuestName, setResGuestName] = useState('');
+  const [resGuestPhone, setResGuestPhone] = useState('');
+  const [resGuestEmail, setResGuestEmail] = useState('');
+  const [resCheckInDate, setResCheckInDate] = useState(today);
+  const [resCheckOutDate, setResCheckOutDate] = useState(tomorrow);
+  const [resAdults, setResAdults] = useState(2);
+  const [resChildren, setResChildren] = useState(0);
+  const [resAdvanceAmount, setResAdvanceAmount] = useState(0);
+  const [resPaymentType, setResPaymentType] = useState<PaymentMethod>('Cash');
+  const [resBookingSource, setResBookingSource] = useState<BookingSource>('Direct');
+  const [resSpecialRequests, setResSpecialRequests] = useState('');
+  const [resSelectedRoom, setResSelectedRoom] = useState<Room | null>(null);
+  const [resAvailableRooms, setResAvailableRooms] = useState<Room[]>([]);
+  const [searchingAvailability, setSearchingAvailability] = useState(false);
 
-        // Pre-select first available room
-        const firstAvailable = roomsList.find(r => r.status === 'Available');
-        if (firstAvailable) {
-          selectRoom(firstAvailable);
-        }
-      } catch (err) {
-        console.error('Error fetching rooms:', err);
+  // Check-in from reservation quick state
+  const [selectedResForCheckIn, setSelectedResForCheckIn] = useState<Reservation | null>(null);
+  const [checkInAdditionalAdvance, setCheckInAdditionalAdvance] = useState(0);
+  const [checkInAddAdvanceType, setCheckInAddAdvanceType] = useState<PaymentMethod>('Cash');
+
+  // Load Initial Rooms, Guests, and Reservations
+  const loadInitialData = async () => {
+    try {
+      setLoading(true);
+      const [roomsList, guestsList, resList] = await Promise.all([
+        getRooms(),
+        getGuests(50),
+        getReservations()
+      ]);
+      setRooms(roomsList);
+      setExistingGuests(guestsList);
+      setReservations(resList);
+
+      // Pre-select first available room for walk-in
+      const firstAvailable = roomsList.find(r => r.status === 'Available');
+      if (firstAvailable && !selectedRoomId) {
+        selectRoom(firstAvailable);
       }
-    };
+
+      if (initialReservationId) {
+        const found = resList.find(r => r.reservationId === initialReservationId);
+        if (found) {
+          setSelectedResForCheckIn(found);
+          setActiveTab('from_reservation');
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching initial checkin data:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     loadInitialData();
   }, []);
 
-  // Update days when dates change
+  // Update days when dates change in walkin
   useEffect(() => {
     if (!manualDaysOverride && checkInDate && expectedCheckOutDate) {
       const calculated = calculateDaysBetween(checkInDate, expectedCheckOutDate);
       setNumberOfDays(calculated > 0 ? calculated : 1);
     }
   }, [checkInDate, expectedCheckOutDate, manualDaysOverride]);
+
+  // Search availability whenever dates change for Future Reservation
+  useEffect(() => {
+    const checkAvailability = async () => {
+      if (resCheckInDate && resCheckOutDate && resCheckOutDate > resCheckInDate) {
+        try {
+          setSearchingAvailability(true);
+          const result = await findAvailableRooms(resCheckInDate, resCheckOutDate);
+          setResAvailableRooms(result.availableRooms);
+          if (resSelectedRoom && !result.availableRooms.some(r => r.roomId === resSelectedRoom.roomId)) {
+            setResSelectedRoom(null);
+          } else if (!resSelectedRoom && result.availableRooms.length > 0) {
+            setResSelectedRoom(result.availableRooms[0]);
+          }
+        } catch (e) {
+          console.error('Availability search error:', e);
+        } finally {
+          setSearchingAvailability(false);
+        }
+      }
+    };
+    checkAvailability();
+  }, [resCheckInDate, resCheckOutDate]);
 
   const selectRoom = (room: Room) => {
     setSelectedRoomId(room.roomId);
@@ -124,64 +198,54 @@ export const CheckIn: React.FC<CheckInProps> = ({
     setRoomTariff(room.tariff || 1500);
   };
 
-  // Check existing guest on phone blur
-  const handlePhoneBlur = async () => {
-    if (guestPhone.trim().length >= 10) {
-      const existing = await findGuestByPhone(guestPhone.trim());
-      if (existing) {
-        fillGuestDetails(existing);
-      }
-    }
-  };
-
-  const fillGuestDetails = (guest: Guest) => {
-    setGuestName(guest.guestName || '');
-    setGuestEmail(guest.email || '');
-    setGuestAddress(guest.address || '');
-    if (guest.idType) setIdType(guest.idType as any);
-    if (guest.idNumber) setIdNumber(guest.idNumber);
-    if (guest.companyName) setCompanyName(guest.companyName);
-    if (guest.companyAddress) setCompanyAddress(guest.companyAddress);
-    if (guest.companyGSTIN) setCompanyGSTIN(guest.companyGSTIN);
-    setIsRepeatGuest(true);
-    toast.info('Guest profile matched', `Loaded records for ${guest.guestName} (${guest.totalStays} previous stays)`);
-  };
-
-  // Calculations
+  // Walk-in Calculations
   const roomValue = roundToTwo(roomTariff * numberOfDays);
   const subtotal = roundToTwo(roomValue + extraCharges);
   const taxableAmount = roundToTwo(Math.max(0, subtotal - discount));
   const totalGST = roundToTwo((taxableAmount * gstRate) / 100);
-  
   const cgst = isInterState ? 0 : roundToTwo(totalGST / 2);
   const sgst = isInterState ? 0 : roundToTwo(totalGST - cgst);
   const igst = isInterState ? totalGST : 0;
-  
   const grossTotal = roundToTwo(taxableAmount + totalGST);
   const balanceDue = roundToTwo(Math.max(0, grossTotal - advancePaid));
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handlePhoneBlur = async () => {
+    if (guestPhone.trim().length >= 10) {
+      const existing = await findGuestByPhone(guestPhone.trim());
+      if (existing) {
+        setGuestName(existing.guestName || '');
+        setGuestEmail(existing.email || '');
+        setGuestAddress(existing.address || '');
+        if (existing.idType) setIdType(existing.idType as any);
+        if (existing.idNumber) setIdNumber(existing.idNumber);
+        if (existing.companyName) setCompanyName(existing.companyName);
+        if (existing.companyAddress) setCompanyAddress(existing.companyAddress);
+        if (existing.companyGSTIN) setCompanyGSTIN(existing.companyGSTIN);
+        toast.info('Guest profile matched', `Loaded records for ${existing.guestName}`);
+      }
+    }
+  };
+
+  const handleWalkInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!guestName.trim()) {
       toast.error('Validation Error', 'Guest Name is required.');
       return;
     }
-
     if (!selectedRoomId) {
-      toast.error('Validation Error', 'Please select a room for check-in.');
+      toast.error('Validation Error', 'Please select an available room.');
       return;
     }
 
-    // Check if room is occupied
     const room = rooms.find(r => r.roomId === selectedRoomId);
     if (room && room.status === 'Occupied') {
       toast.error('Room Occupied', `Room ${room.roomNumber} is currently occupied.`);
       return;
     }
 
-    if (expectedCheckOutDate < checkInDate) {
-      toast.error('Invalid Dates', 'Expected check-out date cannot be earlier than check-in date.');
+    if (expectedCheckOutDate <= checkInDate) {
+      toast.error('Invalid Dates', 'Expected check-out date must be strictly after check-in date.');
       return;
     }
 
@@ -242,276 +306,353 @@ export const CheckIn: React.FC<CheckInProps> = ({
     }
   };
 
+  const handleReservationSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!resGuestName.trim() || !resGuestPhone.trim()) {
+      toast.error('Validation Error', 'Guest Name and Phone are required.');
+      return;
+    }
+    if (!resSelectedRoom) {
+      toast.error('Validation Error', 'Please select an available room.');
+      return;
+    }
+    if (resCheckOutDate <= resCheckInDate) {
+      toast.error('Invalid Dates', 'Check-out date must be after check-in date.');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const createdRes = await createReservation({
+        guestName: resGuestName.trim(),
+        guestPhone: resGuestPhone.trim(),
+        guestEmail: resGuestEmail.trim(),
+        roomId: resSelectedRoom.roomId,
+        roomNumber: resSelectedRoom.roomNumber,
+        roomType: resSelectedRoom.roomType,
+        floor: resSelectedRoom.floor,
+        planType: resSelectedRoom.planType || 'EP',
+        tariff: resSelectedRoom.tariff || 1500,
+        checkInDate: resCheckInDate,
+        checkInTime: '12:00',
+        checkOutDate: resCheckOutDate,
+        checkOutTime: '11:00',
+        numberOfDays: calculateDaysBetween(resCheckInDate, resCheckOutDate) || 1,
+        adults: resAdults,
+        children: resChildren,
+        advanceAmount: resAdvanceAmount,
+        paymentType: resPaymentType,
+        bookingSource: resBookingSource,
+        specialRequests: resSpecialRequests.trim(),
+      });
+
+      toast.success('Reservation Confirmed', `Booking confirmed for ${resGuestName} in Room ${resSelectedRoom.roomNumber}`);
+      
+      // Reload reservations and switch to list
+      await loadInitialData();
+      setActiveTab('from_reservation');
+    } catch (err: any) {
+      toast.error('Booking Failed', err.message || 'Could not create reservation.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCheckInFromRes = async (res: Reservation) => {
+    try {
+      setLoading(true);
+      const stay = await checkInFromReservation({
+        reservationId: res.reservationId,
+        checkInDate: today,
+        checkInTime: getCurrentTimeString(),
+        additionalAdvance: checkInAdditionalAdvance,
+        paymentType: checkInAddAdvanceType,
+      });
+
+      toast.success('Check-in Complete', `${res.guestName} checked in to Room ${res.roomNumber}`);
+      onSuccess(stay);
+    } catch (err: any) {
+      toast.error('Check-in Failed', err.message || 'Could not check in from reservation.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCancelReservation = async (reservationId: string, guestName: string) => {
+    if (!window.confirm(`Are you sure you want to cancel reservation for ${guestName}?`)) return;
+    try {
+      setLoading(true);
+      await cancelReservation(reservationId, 'Cancelled from front desk');
+      toast.info('Reservation Cancelled', `Booking for ${guestName} has been cancelled.`);
+      await loadInitialData();
+    } catch (err: any) {
+      toast.error('Cancellation Failed', err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const activeReservations = reservations.filter(r => r.status === 'CONFIRMED' || r.status === 'PENDING');
+
   return (
     <div className="max-w-6xl mx-auto pb-12 animate-in fade-in duration-200">
-      {/* Header */}
+      {/* Top Header & Workflow Selector */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-6">
         <div>
           <h1 className="text-xl sm:text-2xl font-black text-amber-950 font-['Outfit',sans-serif]">
-            New Guest Check-in
+            Front Desk Check-in & Reservations
           </h1>
           <p className="text-xs text-stone-600 mt-0.5">
-            Register arrival, assign room, record advance & allocate stay
+            Process direct walk-ins, check in reserved guests, or create future room reservations
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="px-4 py-2 text-xs font-bold text-stone-700 hover:text-stone-900 hover:bg-stone-100 rounded-xl transition-colors cursor-pointer"
-          >
-            Cancel
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-4 py-2 text-xs font-bold text-stone-600 bg-white hover:bg-stone-100 rounded-xl border border-stone-200 transition-colors cursor-pointer"
+        >
+          Back to Dashboard
+        </button>
       </div>
 
-      <form onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Inputs (Col Span 2) */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Section 1: Guest Information */}
-          <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200/80 shadow-xs p-5 space-y-4">
-            <div className="flex items-center justify-between border-b border-amber-100 pb-3">
-              <div className="flex items-center gap-2 text-amber-950 font-bold font-['Outfit',sans-serif] text-sm">
-                <UserPlus className="w-4 h-4 text-orange-600" />
-                <span>Guest Information</span>
-              </div>
-              {isRepeatGuest && (
-                <span className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold">
-                  <UserCheck className="w-3 h-3 text-emerald-600" />
-                  <span>Existing Profile Loaded</span>
+      {/* Tabs */}
+      <div className="flex items-center gap-2 border-b border-amber-200 pb-3 mb-6">
+        <button
+          onClick={() => setActiveTab('walkin')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === 'walkin'
+              ? 'bg-gradient-to-r from-red-600 via-orange-600 to-amber-600 text-white shadow-md shadow-orange-600/20'
+              : 'bg-white text-stone-700 hover:bg-amber-50 border border-stone-200'
+          }`}
+        >
+          <UserPlus className="w-4 h-4" />
+          <span>Walk-in Check-in</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('from_reservation')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer relative ${
+            activeTab === 'from_reservation'
+              ? 'bg-gradient-to-r from-red-600 via-orange-600 to-amber-600 text-white shadow-md shadow-orange-600/20'
+              : 'bg-white text-stone-700 hover:bg-amber-50 border border-stone-200'
+          }`}
+        >
+          <BookmarkCheck className="w-4 h-4" />
+          <span>Check-in from Reservation</span>
+          {activeReservations.length > 0 && (
+            <span className="ml-1 px-1.5 py-0.5 text-[10px] bg-amber-400 text-stone-950 font-extrabold rounded-full">
+              {activeReservations.length}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('new_reservation')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === 'new_reservation'
+              ? 'bg-gradient-to-r from-red-600 via-orange-600 to-amber-600 text-white shadow-md shadow-orange-600/20'
+              : 'bg-white text-stone-700 hover:bg-amber-50 border border-stone-200'
+          }`}
+        >
+          <CalendarDays className="w-4 h-4" />
+          <span>New Future Reservation</span>
+        </button>
+      </div>
+
+      {/* TAB 1: WALK-IN CHECK-IN */}
+      {activeTab === 'walkin' && (
+        <form onSubmit={handleWalkInSubmit} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Main Details (2 cols) */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Guest Information */}
+            <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200/80 p-5 shadow-xs space-y-4">
+              <div className="flex items-center justify-between border-b border-amber-100 pb-3">
+                <div className="flex items-center gap-2 text-stone-900 font-bold text-sm">
+                  <UserPlus className="w-4 h-4 text-orange-600" />
+                  <span>Guest & Contact Details</span>
+                </div>
+                <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">
+                  Primary Resident
                 </span>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Guest Full Name *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={guestName}
-                  onChange={(e) => setGuestName(e.target.value)}
-                  placeholder="e.g. Ramesh Chandra"
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none uppercase"
-                />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Mobile Number
-                </label>
-                <input
-                  type="tel"
-                  value={guestPhone}
-                  onChange={(e) => setGuestPhone(e.target.value)}
-                  onBlur={handlePhoneBlur}
-                  placeholder="e.g. 9876543210"
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  value={guestEmail}
-                  onChange={(e) => setGuestEmail(e.target.value)}
-                  placeholder="guest@example.com"
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  ID Document Type
-                </label>
-                <select
-                  value={idType}
-                  onChange={(e) => setIdType(e.target.value as any)}
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
-                >
-                  <option value="Aadhaar Card">Aadhaar Card</option>
-                  <option value="Passport">Passport</option>
-                  <option value="Driving License">Driving License</option>
-                  <option value="Voter ID">Voter ID</option>
-                  <option value="PAN Card">PAN Card</option>
-                  <option value="Other">Other Government ID</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  ID Card Number
-                </label>
-                <input
-                  type="text"
-                  value={idNumber}
-                  onChange={(e) => setIdNumber(e.target.value)}
-                  placeholder="e.g. 1234 5678 9012"
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none font-mono"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-stone-800 mb-1">
-                    Adults
+                    Phone Number *
                   </label>
                   <input
-                    type="number"
-                    min="1"
-                    max="10"
-                    value={paxAdults}
-                    onChange={(e) => setPaxAdults(parseInt(e.target.value) || 1)}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                    type="tel"
+                    required
+                    value={guestPhone}
+                    onChange={(e) => setGuestPhone(e.target.value)}
+                    onBlur={handlePhoneBlur}
+                    placeholder="10-digit mobile number"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
                   />
                 </div>
+
                 <div>
                   <label className="block text-xs font-bold text-stone-800 mb-1">
-                    Children
+                    Guest Name *
                   </label>
                   <input
-                    type="number"
-                    min="0"
-                    max="6"
-                    value={paxChildren}
-                    onChange={(e) => setPaxChildren(parseInt(e.target.value) || 0)}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                    type="text"
+                    required
+                    value={guestName}
+                    onChange={(e) => setGuestName(e.target.value)}
+                    placeholder="Full name as per ID"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    value={guestEmail}
+                    onChange={(e) => setGuestEmail(e.target.value)}
+                    placeholder="e.g. guest@example.com"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    City / Address
+                  </label>
+                  <input
+                    type="text"
+                    value={guestAddress}
+                    onChange={(e) => setGuestAddress(e.target.value)}
+                    placeholder="City, State"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    ID Type
+                  </label>
+                  <select
+                    value={idType}
+                    onChange={(e) => setIdType(e.target.value as any)}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
+                  >
+                    <option value="Aadhaar Card">Aadhaar Card</option>
+                    <option value="Driving License">Driving License</option>
+                    <option value="Passport">Passport</option>
+                    <option value="Voter ID">Voter ID</option>
+                    <option value="PAN Card">PAN Card</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    ID Document Number
+                  </label>
+                  <input
+                    type="text"
+                    value={idNumber}
+                    onChange={(e) => setIdNumber(e.target.value)}
+                    placeholder="e.g. 12-digit Aadhaar / DL No"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
                   />
                 </div>
               </div>
-
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Full Residential Address / City
-                </label>
-                <input
-                  type="text"
-                  value={guestAddress}
-                  onChange={(e) => setGuestAddress(e.target.value)}
-                  placeholder="e.g. Flat 302, Green Meadows, Hyderabad"
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Section 2: Room Selection & Stay Dates */}
-          <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200/80 shadow-xs p-5 space-y-4">
-            <div className="flex items-center justify-between border-b border-amber-100 pb-3">
-              <div className="flex items-center gap-2 text-amber-950 font-bold font-['Outfit',sans-serif] text-sm">
-                <BedDouble className="w-4 h-4 text-orange-600" />
-                <span>Room Assignment & Schedule</span>
-              </div>
             </div>
 
-            {/* Room selection pills */}
-            <div>
-              <label className="block text-xs font-bold text-stone-800 mb-2">
-                Select Available Room *
-              </label>
-              {rooms.length === 0 ? (
-                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center justify-between">
-                  <span>No rooms registered yet. Please add rooms in the <b>Rooms</b> menu first.</span>
+            {/* Room Allocation */}
+            <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200/80 p-5 shadow-xs space-y-4">
+              <div className="flex items-center justify-between border-b border-amber-100 pb-3">
+                <div className="flex items-center gap-2 text-stone-900 font-bold text-sm">
+                  <BedDouble className="w-4 h-4 text-orange-600" />
+                  <span>Room Allocation & Dates</span>
                 </div>
-              ) : (
-                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                  {rooms.map((room) => {
-                    const isSelected = selectedRoomId === room.roomId;
-                    const isAvailable = room.status === 'Available';
+                <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full">
+                  Inventory Selection
+                </span>
+              </div>
 
+              {/* Room Cards Grid */}
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-stone-800">
+                  Select Room from Inventory (Exact 24 Rooms) *
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2 max-h-48 overflow-y-auto p-1 bg-amber-50/40 rounded-xl border border-amber-200/50">
+                  {rooms.map((r) => {
+                    const isAvail = r.status === 'Available';
+                    const isSelected = selectedRoomId === r.roomId;
                     return (
                       <button
                         type="button"
-                        key={room.roomId}
-                        disabled={!isAvailable}
-                        onClick={() => selectRoom(room)}
-                        className={`
-                          p-2.5 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center
-                          ${isSelected 
-                            ? 'bg-gradient-to-br from-stone-900 to-amber-950 text-white border-amber-400 shadow-md scale-102' 
-                            : isAvailable
-                            ? 'bg-white hover:border-orange-400 border-stone-300 text-stone-900'
-                            : 'bg-stone-100/70 border-stone-200 text-stone-400 opacity-60 cursor-not-allowed'
-                          }
-                        `}
+                        key={r.roomId}
+                        disabled={!isAvail}
+                        onClick={() => selectRoom(r)}
+                        className={`p-2 rounded-xl border text-center transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-orange-600 text-white border-orange-700 shadow-sm'
+                            : isAvail
+                            ? 'bg-white hover:bg-amber-100 text-stone-800 border-emerald-300'
+                            : 'bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed opacity-60'
+                        }`}
                       >
-                        <span className={`text-xs font-mono font-black ${isSelected ? 'text-amber-300' : 'text-stone-900'}`}>
-                          {room.roomNumber}
-                        </span>
-                        <span className="text-[10px] truncate max-w-full font-medium mt-0.5">
-                          {room.roomType.replace(' Room', '')}
-                        </span>
-                        <span className={`text-[9px] px-1 py-0.2 rounded mt-1 font-bold ${
-                          isSelected 
-                            ? 'bg-amber-400 text-stone-950' 
-                            : isAvailable 
-                            ? 'bg-emerald-100 text-emerald-800' 
-                            : 'bg-stone-200 text-stone-600'
-                        }`}>
-                          {isAvailable ? formatINR(room.tariff) : room.status}
-                        </span>
+                        <div className="text-xs font-black font-mono">{r.roomNumber}</div>
+                        <div className="text-[9px] truncate font-semibold">{r.roomType}</div>
+                        <div className="text-[8px] opacity-80">{r.floor}</div>
                       </button>
                     );
                   })}
                 </div>
-              )}
-            </div>
+              </div>
 
-            {/* Stay Dates and Plan */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Check-in Date & Time
-                </label>
-                <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-2">
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Check-in Date *
+                  </label>
                   <input
                     type="date"
                     required
                     value={checkInDate}
                     onChange={(e) => setCheckInDate(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Check-in Time
+                  </label>
                   <input
                     type="time"
                     value={checkInTime}
                     onChange={(e) => setCheckInTime(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
                   />
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Expected Check-out Date & Time
-                </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Expected Checkout *
+                  </label>
                   <input
                     type="date"
                     required
-                    min={checkInDate}
                     value={expectedCheckOutDate}
                     onChange={(e) => setExpectedCheckOutDate(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
-                  />
-                  <input
-                    type="time"
-                    value={expectedCheckOutTime}
-                    onChange={(e) => setExpectedCheckOutTime(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-xs font-bold text-stone-800 mb-1">
-                    Stay Duration (Days)
+                    Nights / Days
                   </label>
                   <input
                     type="number"
@@ -519,12 +660,14 @@ export const CheckIn: React.FC<CheckInProps> = ({
                     value={numberOfDays}
                     onChange={(e) => {
                       setManualDaysOverride(true);
-                      setNumberOfDays(Math.max(1, parseInt(e.target.value) || 1));
+                      setNumberOfDays(parseInt(e.target.value, 10) || 1);
                     }}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none font-bold"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
                   />
                 </div>
+              </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-stone-800 mb-1">
                     Plan Type
@@ -532,313 +675,520 @@ export const CheckIn: React.FC<CheckInProps> = ({
                   <select
                     value={planType}
                     onChange={(e) => setPlanType(e.target.value as PlanType)}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none font-bold"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
                   >
-                    <option value="EP">EP (Room Only)</option>
-                    <option value="CP">CP (With Breakfast)</option>
-                    <option value="MAP">MAP (Breakfast + Dinner)</option>
-                    <option value="AP">AP (All Meals)</option>
+                    <option value="EP">EP (European Plan - Room Only)</option>
+                    <option value="CP">CP (Continental - Incl. Breakfast)</option>
+                    <option value="MAP">MAP (Modified - Breakfast + 1 Meal)</option>
+                    <option value="AP">AP (American - All Meals)</option>
                   </select>
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-xs font-bold text-stone-800 mb-1">
-                    Room Tariff per Day (₹)
+                    Adults
                   </label>
                   <input
                     type="number"
-                    min="0"
-                    step="50"
-                    value={roomTariff}
-                    onChange={(e) => setRoomTariff(parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none font-mono font-bold"
+                    min="1"
+                    max="6"
+                    value={paxAdults}
+                    onChange={(e) => setPaxAdults(parseInt(e.target.value, 10) || 1)}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold text-stone-800 mb-1">
-                    GST Rate (%)
+                    Children
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="4"
+                    value={paxChildren}
+                    onChange={(e) => setPaxChildren(parseInt(e.target.value, 10) || 0)}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Corporate / GST & OTA Billing Details */}
+            <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200/80 p-5 shadow-xs space-y-4">
+              <div className="flex items-center justify-between border-b border-amber-100 pb-3">
+                <div className="flex items-center gap-2 text-stone-900 font-bold text-sm">
+                  <Building className="w-4 h-4 text-orange-600" />
+                  <span>Company GSTIN & Booking References</span>
+                </div>
+                <span className="text-[10px] font-bold text-stone-500">Optional</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Company Name
+                  </label>
+                  <input
+                    type="text"
+                    value={companyName}
+                    onChange={(e) => setCompanyName(e.target.value)}
+                    placeholder="e.g. Tech Corp Ltd"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Company GSTIN
+                  </label>
+                  <input
+                    type="text"
+                    value={companyGSTIN}
+                    onChange={(e) => setCompanyGSTIN(e.target.value.toUpperCase())}
+                    placeholder="15-digit GSTIN"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Booking ID / GRC No
+                  </label>
+                  <input
+                    type="text"
+                    value={bookingId}
+                    onChange={(e) => setBookingId(e.target.value)}
+                    placeholder="e.g. GRC-1049"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Billing & Advance Summary (1 col) */}
+          <div className="space-y-6">
+            <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200 p-5 shadow-sm space-y-4 sticky top-6">
+              <h3 className="font-black text-base text-stone-950 font-['Outfit',sans-serif] border-b border-amber-100 pb-3">
+                Tariff & Advance Collection
+              </h3>
+
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="block font-bold text-stone-800 mb-1">
+                    Room Tariff / Night (₹) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="0"
+                    value={roomTariff}
+                    onChange={(e) => setRoomTariff(parseFloat(e.target.value) || 0)}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl font-mono text-sm font-bold"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block font-bold text-stone-800 mb-1">
+                      GST Rate (%)
+                    </label>
+                    <select
+                      value={gstRate}
+                      onChange={(e) => setGstRate(parseFloat(e.target.value))}
+                      className="w-full px-2.5 py-1.5 bg-white border border-stone-300 rounded-xl text-xs font-bold"
+                    >
+                      <option value={12}>12% (Rooms ≤ 7.5k)</option>
+                      <option value={18}>18% (Rooms &gt; 7.5k)</option>
+                      <option value={0}>0% (Exempt)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-stone-800 mb-1">
+                      Advance Paid (₹)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={advancePaid}
+                      onChange={(e) => setAdvancePaid(parseFloat(e.target.value) || 0)}
+                      className="w-full px-2.5 py-1.5 bg-white border border-emerald-300 rounded-xl font-mono text-xs font-bold text-emerald-800"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-stone-800 mb-1">
+                    Advance Payment Method
                   </label>
                   <select
-                    value={gstRate}
-                    onChange={(e) => setGstRate(parseFloat(e.target.value))}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none font-bold"
+                    value={paymentType}
+                    onChange={(e) => setPaymentType(e.target.value as PaymentMethod)}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-semibold"
                   >
-                    <option value="12">12% (Standard Hotel GST)</option>
-                    <option value="18">18% (Luxury Suite GST)</option>
-                    <option value="5">5% (Economy GST)</option>
-                    <option value="0">0% (Exempt)</option>
+                    <option value="Cash">Cash</option>
+                    <option value="UPI">UPI / QR</option>
+                    <option value="Card">Credit / Debit Card</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                    <option value="Credit">Company Bill-to-Company</option>
+                  </select>
+                </div>
+
+                {/* Live Cost Breakdown */}
+                <div className="bg-amber-50/60 rounded-xl p-3.5 border border-amber-200/80 space-y-1.5 text-xs font-mono">
+                  <div className="flex justify-between text-stone-600">
+                    <span>Base Tariff ({numberOfDays}N):</span>
+                    <span>{formatINR(roomValue)}</span>
+                  </div>
+                  <div className="flex justify-between text-stone-600">
+                    <span>Estimated GST ({gstRate}%):</span>
+                    <span>{formatINR(totalGST)}</span>
+                  </div>
+                  <div className="flex justify-between text-stone-900 font-extrabold border-t border-amber-200 pt-1 text-sm">
+                    <span>Estimated Total:</span>
+                    <span>{formatINR(grossTotal)}</span>
+                  </div>
+                  <div className="flex justify-between text-emerald-700 font-bold">
+                    <span>Advance Received:</span>
+                    <span>- {formatINR(advancePaid)}</span>
+                  </div>
+                  <div className="flex justify-between text-red-700 font-extrabold border-t border-amber-200 pt-1">
+                    <span>Est. Balance Due:</span>
+                    <span>{formatINR(balanceDue)}</span>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={loading || !selectedRoomId}
+                  className="w-full py-3 bg-gradient-to-r from-red-600 via-orange-600 to-amber-600 hover:from-red-700 hover:to-amber-700 text-white rounded-xl text-sm font-black shadow-lg shadow-orange-600/30 transition-all cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <CheckCircle2 className="w-5 h-5" />
+                  <span>{loading ? 'Processing...' : 'Complete Walk-in Check-in'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </form>
+      )}
+
+      {/* TAB 2: CHECK-IN FROM RESERVATION */}
+      {activeTab === 'from_reservation' && (
+        <div className="space-y-6">
+          <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200/80 p-5 shadow-xs">
+            <div className="flex items-center justify-between border-b border-amber-100 pb-3 mb-4">
+              <h2 className="font-black text-base text-amber-950 font-['Outfit',sans-serif]">
+                Confirmed Reservations ({activeReservations.length})
+              </h2>
+              <span className="text-xs text-stone-600">
+                Select a guest to confirm arrival and assign room keys
+              </span>
+            </div>
+
+            {activeReservations.length === 0 ? (
+              <div className="py-12 text-center text-stone-500">
+                <BookmarkCheck className="w-12 h-12 text-amber-300 mx-auto mb-2" />
+                <p className="text-sm font-bold text-stone-700">No pending reservations</p>
+                <p className="text-xs text-stone-500 mt-1">Create a future reservation or process a direct walk-in.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {activeReservations.map((res) => (
+                  <div
+                    key={res.reservationId}
+                    className="bg-white rounded-2xl border border-amber-200 p-4 shadow-xs hover:border-orange-400 transition-all flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="text-base font-black text-stone-900 font-['Outfit',sans-serif]">
+                            {res.guestName}
+                          </div>
+                          <div className="text-xs text-stone-600 font-mono">
+                            📞 {res.guestPhone}
+                          </div>
+                        </div>
+
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          {res.status}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-mono bg-amber-50/50 p-2.5 rounded-xl border border-amber-100">
+                        <div>
+                          <span className="text-stone-500 block text-[10px]">Room:</span>
+                          <span className="font-extrabold text-stone-900">{res.roomNumber} ({res.roomType})</span>
+                        </div>
+                        <div>
+                          <span className="text-stone-500 block text-[10px]">Tariff:</span>
+                          <span className="font-extrabold text-stone-900">{formatINR(res.tariff)} / night</span>
+                        </div>
+                        <div>
+                          <span className="text-stone-500 block text-[10px]">Check-in:</span>
+                          <span className="font-bold text-stone-800">{formatDateForDisplay(res.checkInDate)}</span>
+                        </div>
+                        <div>
+                          <span className="text-stone-500 block text-[10px]">Check-out:</span>
+                          <span className="font-bold text-stone-800">{formatDateForDisplay(res.checkOutDate)}</span>
+                        </div>
+                      </div>
+
+                      {res.advanceAmount > 0 && (
+                        <div className="mt-2 text-xs text-emerald-700 font-bold flex items-center justify-between">
+                          <span>Advance Recorded:</span>
+                          <span>{formatINR(res.advanceAmount)} ({res.paymentType || 'Cash'})</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-stone-100 flex items-center justify-between gap-2">
+                      <button
+                        onClick={() => handleCancelReservation(res.reservationId, res.guestName)}
+                        className="px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-red-50 rounded-xl cursor-pointer"
+                      >
+                        Cancel Booking
+                      </button>
+
+                      <button
+                        onClick={() => handleCheckInFromRes(res)}
+                        disabled={loading}
+                        className="px-4 py-1.5 bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-700 hover:to-orange-700 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer flex items-center gap-1.5"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Check In Guest</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: NEW FUTURE RESERVATION */}
+      {activeTab === 'new_reservation' && (
+        <form onSubmit={handleReservationSubmit} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200/80 p-5 shadow-xs space-y-4">
+              <h2 className="font-black text-base text-stone-900 font-['Outfit',sans-serif] border-b border-amber-100 pb-3">
+                Guest & Booking Details
+              </h2>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Guest Phone Number *
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    value={resGuestPhone}
+                    onChange={(e) => setResGuestPhone(e.target.value)}
+                    placeholder="10-digit mobile number"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Guest Full Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={resGuestName}
+                    onChange={(e) => setResGuestName(e.target.value)}
+                    placeholder="Guest name"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    value={resGuestEmail}
+                    onChange={(e) => setResGuestEmail(e.target.value)}
+                    placeholder="guest@example.com"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Booking Source
+                  </label>
+                  <select
+                    value={resBookingSource}
+                    onChange={(e) => setResBookingSource(e.target.value as BookingSource)}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-semibold"
+                  >
+                    <option value="Direct">Direct Front Desk</option>
+                    <option value="Phone">Phone Reservation</option>
+                    <option value="Walk-in">Advance Walk-in</option>
+                    <option value="OTA">OTA (MakeMyTrip / Agoda / Goibibo)</option>
+                    <option value="Website">Official Website</option>
+                    <option value="Other">Other Referral</option>
                   </select>
                 </div>
               </div>
             </div>
-          </div>
 
-          {/* Section 3: Company & Booking / OTA Details (Collapsible/Optional) */}
-          <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200/80 shadow-xs p-5 space-y-4">
-            <div className="flex items-center justify-between border-b border-amber-100 pb-3">
-              <div className="flex items-center gap-2 text-amber-950 font-bold font-['Outfit',sans-serif] text-sm">
-                <Building className="w-4 h-4 text-orange-600" />
-                <span>Company & OTA Billing Details</span>
-              </div>
-              <span className="text-[11px] text-stone-400">Optional</span>
-            </div>
+            {/* Date Selection & Real-time Available Rooms */}
+            <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200/80 p-5 shadow-xs space-y-4">
+              <h2 className="font-black text-base text-stone-900 font-['Outfit',sans-serif] border-b border-amber-100 pb-3">
+                Dates & Real-time Room Availability Check
+              </h2>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Company Name
-                </label>
-                <input
-                  type="text"
-                  value={companyName}
-                  onChange={(e) => setCompanyName(e.target.value)}
-                  placeholder="e.g. Infosys Technologies Ltd"
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
-                />
-              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Check-in Date *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={resCheckInDate}
+                    onChange={(e) => setResCheckInDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Company GSTIN
-                </label>
-                <input
-                  type="text"
-                  value={companyGSTIN}
-                  onChange={(e) => setCompanyGSTIN(e.target.value)}
-                  placeholder="e.g. 36AABCC1234F1ZH"
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none font-mono"
-                />
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Check-out Date *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={resCheckOutDate}
+                    onChange={(e) => setResCheckOutDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
+                  />
+                </div>
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Booking ID / Reservation Ref
+                  Available Rooms for Selected Dates ({resAvailableRooms.length} of 24 Available) *
                 </label>
-                <input
-                  type="text"
-                  value={bookingId}
-                  onChange={(e) => setBookingId(e.target.value)}
-                  placeholder="e.g. MMT-9823471"
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  GRC Number
-                </label>
-                <input
-                  type="text"
-                  value={grcNumber}
-                  onChange={(e) => setGrcNumber(e.target.value)}
-                  placeholder="e.g. GRC-2024-0412"
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Ref / OTA Channel
-                </label>
-                <input
-                  type="text"
-                  value={refOTA}
-                  onChange={(e) => setRefOTA(e.target.value)}
-                  placeholder="e.g. MakeMyTrip / Booking.com / Direct Walk-in"
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Ref / OTA GSTIN
-                </label>
-                <input
-                  type="text"
-                  value={refOTAGSTIN}
-                  onChange={(e) => setRefOTAGSTIN(e.target.value)}
-                  placeholder="e.g. 07AAACM4152A1ZY"
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none font-mono"
-                />
+                {searchingAvailability ? (
+                  <div className="p-4 text-center text-xs text-stone-500">Checking Firestore room availability...</div>
+                ) : resAvailableRooms.length === 0 ? (
+                  <div className="p-4 bg-red-50 text-red-700 rounded-xl text-xs font-bold border border-red-200">
+                    No rooms available for the selected dates. Please choose different dates.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2 max-h-48 overflow-y-auto p-1 bg-amber-50/40 rounded-xl border border-amber-200/50">
+                    {resAvailableRooms.map((r) => {
+                      const isSelected = resSelectedRoom?.roomId === r.roomId;
+                      return (
+                        <button
+                          type="button"
+                          key={r.roomId}
+                          onClick={() => setResSelectedRoom(r)}
+                          className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-orange-600 text-white border-orange-700 shadow-sm'
+                              : 'bg-white hover:bg-amber-100 text-stone-800 border-emerald-300'
+                          }`}
+                        >
+                          <div className="text-xs font-black font-mono">{r.roomNumber}</div>
+                          <div className="text-[9px] truncate font-semibold">{r.roomType}</div>
+                          <div className="text-[8px] font-mono opacity-80">{formatINR(r.tariff)}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Financial Calculation Sidebar (Col Span 1) */}
-        <div className="space-y-6">
-          <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200/80 shadow-md p-5 space-y-4 sticky top-20">
-            <div className="flex items-center gap-2 border-b border-amber-100 pb-3 text-amber-950 font-bold font-['Outfit',sans-serif] text-sm">
-              <CreditCard className="w-4 h-4 text-orange-600" />
-              <span>Stay Billing Calculation</span>
-            </div>
+          {/* Reservation Summary */}
+          <div className="space-y-6">
+            <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200 p-5 shadow-sm space-y-4 sticky top-6">
+              <h3 className="font-black text-base text-stone-950 font-['Outfit',sans-serif] border-b border-amber-100 pb-3">
+                Reservation Advance & Notes
+              </h3>
 
-            {/* Financial breakdown inputs */}
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Special Discount (₹)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  value={discount}
-                  onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none font-mono"
-                />
-              </div>
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="block font-bold text-stone-800 mb-1">
+                    Advance Payment Collected (₹)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={resAdvanceAmount}
+                    onChange={(e) => setResAdvanceAmount(parseFloat(e.target.value) || 0)}
+                    className="w-full px-3 py-2 bg-white border border-emerald-300 rounded-xl font-mono text-sm font-bold text-emerald-800"
+                  />
+                  <p className="text-[10px] text-stone-500 mt-0.5">
+                    Will create an authentic payment record in payments collection.
+                  </p>
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Extra Charges / Room Services (₹)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  value={extraCharges}
-                  onChange={(e) => setExtraCharges(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none font-mono"
-                />
-              </div>
+                <div>
+                  <label className="block font-bold text-stone-800 mb-1">
+                    Payment Method
+                  </label>
+                  <select
+                    value={resPaymentType}
+                    onChange={(e) => setResPaymentType(e.target.value as PaymentMethod)}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-semibold"
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="UPI">UPI / QR</option>
+                    <option value="Card">Card</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                  </select>
+                </div>
 
-              <div className="pt-2 border-t border-amber-100">
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Advance Paid at Check-in (₹)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  max={grossTotal}
-                  value={advancePaid}
-                  onChange={(e) => setAdvancePaid(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 bg-amber-50/60 border border-amber-300 rounded-xl text-stone-950 text-sm font-mono font-bold focus:ring-2 focus:ring-orange-500 focus:outline-none"
-                />
-              </div>
+                <div>
+                  <label className="block font-bold text-stone-800 mb-1">
+                    Special Requests / Notes
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={resSpecialRequests}
+                    onChange={(e) => setResSpecialRequests(e.target.value)}
+                    placeholder="Late arrival, extra mattress, etc."
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-stone-800 mb-1">
-                  Payment Mode
-                </label>
-                <select
-                  value={paymentType}
-                  onChange={(e) => setPaymentType(e.target.value as PaymentMethod)}
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none font-bold"
+                {resSelectedRoom && (
+                  <div className="bg-amber-50/70 rounded-xl p-3 border border-amber-200 text-xs font-mono space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-stone-600">Selected Room:</span>
+                      <span className="font-extrabold text-stone-900">{resSelectedRoom.roomNumber} ({resSelectedRoom.roomType})</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-stone-600">Tariff / Night:</span>
+                      <span className="font-extrabold text-stone-900">{formatINR(resSelectedRoom.tariff)}</span>
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loading || !resSelectedRoom}
+                  className="w-full py-3 bg-gradient-to-r from-red-600 via-orange-600 to-amber-600 hover:from-red-700 hover:to-amber-700 text-white rounded-xl text-sm font-black shadow-lg shadow-orange-600/30 transition-all cursor-pointer flex items-center justify-center gap-2"
                 >
-                  <option value="Cash">Cash</option>
-                  <option value="UPI">UPI / QR Code</option>
-                  <option value="Card">Credit / Debit Card</option>
-                  <option value="Bank Transfer">Bank Transfer / NEFT</option>
-                  <option value="Credit">Credit Bill / Company Account</option>
-                  <option value="Other">Other Mode</option>
-                </select>
-              </div>
-
-              {/* Inter-state GST Toggle */}
-              <div className="flex items-center justify-between p-2 rounded-xl bg-amber-50/50 border border-amber-200/60">
-                <span className="text-[11px] font-bold text-stone-800">Inter-State (IGST)</span>
-                <input
-                  type="checkbox"
-                  checked={isInterState}
-                  onChange={(e) => setIsInterState(e.target.checked)}
-                  className="w-4 h-4 text-orange-600 rounded border-stone-300 focus:ring-orange-500 cursor-pointer"
-                />
+                  <BookmarkCheck className="w-5 h-5" />
+                  <span>{loading ? 'Creating Booking...' : 'Confirm Reservation'}</span>
+                </button>
               </div>
             </div>
-
-            {/* Computed Ledger Table */}
-            <div className="border border-stone-200 rounded-xl bg-stone-50 p-3 space-y-1.5 text-xs">
-              <div className="flex justify-between text-stone-600">
-                <span>Room Tariff ({numberOfDays}d × {formatINR(roomTariff)}):</span>
-                <span className="font-mono font-semibold">{formatINR(roomValue)}</span>
-              </div>
-              {extraCharges > 0 && (
-                <div className="flex justify-between text-stone-600">
-                  <span>Extras:</span>
-                  <span className="font-mono">{formatINR(extraCharges)}</span>
-                </div>
-              )}
-              {discount > 0 && (
-                <div className="flex justify-between text-red-600">
-                  <span>Discount:</span>
-                  <span className="font-mono">-{formatINR(discount)}</span>
-                </div>
-              )}
-              <div className="flex justify-between font-bold text-stone-800 pt-1 border-t border-stone-200">
-                <span>Taxable Amount:</span>
-                <span className="font-mono">{formatINR(taxableAmount)}</span>
-              </div>
-              
-              {!isInterState ? (
-                <>
-                  <div className="flex justify-between text-stone-600 text-[11px]">
-                    <span>CGST ({(gstRate / 2).toFixed(1)}%):</span>
-                    <span className="font-mono">{formatINR(cgst)}</span>
-                  </div>
-                  <div className="flex justify-between text-stone-600 text-[11px]">
-                    <span>SGST ({(gstRate / 2).toFixed(1)}%):</span>
-                    <span className="font-mono">{formatINR(sgst)}</span>
-                  </div>
-                </>
-              ) : (
-                <div className="flex justify-between text-stone-600 text-[11px]">
-                  <span>IGST ({gstRate.toFixed(1)}%):</span>
-                  <span className="font-mono">{formatINR(igst)}</span>
-                </div>
-              )}
-
-              <div className="flex justify-between text-stone-900 font-extrabold text-sm pt-1.5 border-t border-stone-300">
-                <span>Gross Total:</span>
-                <span className="font-mono text-orange-900">{formatINR(grossTotal)}</span>
-              </div>
-
-              {advancePaid > 0 && (
-                <div className="flex justify-between text-emerald-700 font-semibold">
-                  <span>Advance Paid:</span>
-                  <span className="font-mono">-{formatINR(advancePaid)}</span>
-                </div>
-              )}
-
-              <div className="flex justify-between text-stone-950 font-black text-sm pt-1.5 border-t-2 border-stone-900">
-                <span>Balance Due at Checkout:</span>
-                <span className="font-mono text-amber-950">{formatINR(balanceDue)}</span>
-              </div>
-            </div>
-
-            {/* Notes */}
-            <div>
-              <label className="block text-xs font-bold text-stone-800 mb-1">
-                Stay Notes / Remarks
-              </label>
-              <textarea
-                rows={2}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Special requests, arrival notes, vehicle number..."
-                className="w-full px-3 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-none"
-              />
-            </div>
-
-            {/* Submit Check-in Button */}
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-red-600 via-orange-600 to-amber-600 hover:from-red-700 hover:to-amber-700 text-white font-bold text-xs shadow-lg shadow-orange-600/30 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 transition-all"
-            >
-              {loading ? (
-                <span>Registering Stay...</span>
-              ) : (
-                <>
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>Confirm & Save Check-in</span>
-                </>
-              )}
-            </button>
           </div>
-        </div>
-      </form>
+        </form>
+      )}
     </div>
   );
 };

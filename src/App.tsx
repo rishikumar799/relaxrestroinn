@@ -173,6 +173,8 @@ const MainApp: React.FC = () => {
           {currentPage === 'checkin' && (
             <CheckIn
               settings={settings}
+              initialTab={pageParams?.tab || 'walkin'}
+              initialReservationId={pageParams?.reservationId}
               onSuccess={(stay) => {
                 loadInitialSettingsAndCounts();
                 handleNavigate('dashboard');
@@ -215,7 +217,8 @@ const MainApp: React.FC = () => {
           {currentPage === 'rooms' && (
             <Rooms
               settings={settings}
-              onCheckInRoom={(room) => handleNavigate('checkin', { roomId: room.roomId })}
+              onNavigate={handleNavigate}
+              onCheckInRoom={(room) => handleNavigate('checkin', { tab: 'walkin', roomId: room.roomId })}
             />
           )}
 
@@ -229,7 +232,7 @@ const MainApp: React.FC = () => {
             <CalendarView
               settings={settings}
               onViewBill={(bill) => setActiveBillModal(bill)}
-              onCheckIn={() => handleNavigate('checkin')}
+              onCheckIn={(params) => handleNavigate('checkin', params)}
             />
           )}
 

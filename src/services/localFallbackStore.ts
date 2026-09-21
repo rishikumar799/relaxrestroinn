@@ -1,4 +1,4 @@
-import { Room, Stay, Guest, Bill, Payment, HotelSettings, ActivityLog } from '../types';
+import { Room, Stay, Guest, Bill, Payment, HotelSettings, ActivityLog, Reservation } from '../types';
 import { DEFAULT_HOTEL_SETTINGS } from './settingsService';
 
 function getStored<T>(key: string, defaultVal: T): T {
@@ -20,6 +20,24 @@ function setStored<T>(key: string, val: T): void {
 }
 
 export const localFallbackStore = {
+  // Reservations
+  getReservations: (): Reservation[] => {
+    return getStored<Reservation[]>('reservations', []);
+  },
+  saveReservations: (reservations: Reservation[]) => {
+    setStored('reservations', reservations);
+  },
+  saveReservation: (res: Reservation) => {
+    const list = localFallbackStore.getReservations();
+    const idx = list.findIndex(r => r.reservationId === res.reservationId);
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], ...res };
+    } else {
+      list.unshift(res);
+    }
+    localFallbackStore.saveReservations(list);
+  },
+
   // Rooms
   getRooms: (): Room[] => {
     return getStored<Room[]>('rooms', []);

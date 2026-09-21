@@ -11,30 +11,141 @@ import {
   serverTimestamp 
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { Room, RoomStatus } from '../types';
+import { Room, RoomStatus, PlanType } from '../types';
 import { logActivity } from './activityService';
 import { localFallbackStore } from './localFallbackStore';
 
 const ROOMS_COLLECTION = 'rooms';
 
+export const OFFICIAL_ROOM_INVENTORY: {
+  roomNumber: string;
+  floor: string;
+  defaultType: string;
+  defaultTariff: number;
+  defaultPlan: PlanType;
+}[] = [
+  // 1ST FLOOR (5 Rooms)
+  { roomNumber: '101', floor: '1st Floor', defaultType: 'Executive Room', defaultTariff: 1500, defaultPlan: 'EP' },
+  { roomNumber: '102', floor: '1st Floor', defaultType: 'Executive Room', defaultTariff: 1500, defaultPlan: 'EP' },
+  { roomNumber: '103', floor: '1st Floor', defaultType: 'Executive Room', defaultTariff: 1500, defaultPlan: 'EP' },
+  { roomNumber: '104', floor: '1st Floor', defaultType: 'Executive Room', defaultTariff: 1500, defaultPlan: 'EP' },
+  { roomNumber: '105', floor: '1st Floor', defaultType: 'Executive Room', defaultTariff: 1500, defaultPlan: 'EP' },
+
+  // 2ND FLOOR (10 Rooms)
+  { roomNumber: '201', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '202', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '203', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '204', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '205', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '206', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '207', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '208', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '209', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
+  { roomNumber: '210', floor: '2nd Floor', defaultType: 'Deluxe Room', defaultTariff: 1800, defaultPlan: 'EP' },
+
+  // 3RD FLOOR (9 Rooms)
+  { roomNumber: '301', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
+  { roomNumber: '302', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
+  { roomNumber: '303', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
+  { roomNumber: '304', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
+  { roomNumber: '305', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
+  { roomNumber: '306', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
+  { roomNumber: '307', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
+  { roomNumber: '308', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
+  { roomNumber: '309', floor: '3rd Floor', defaultType: 'Suite Room', defaultTariff: 2200, defaultPlan: 'CP' },
+];
+
+/**
+ * Ensures the exact 24 rooms exist in Firestore in a non-destructive manner.
+ * Preserves all existing room settings (tariff, roomType, status, current guests).
+ */
+export async function syncOfficialInventory(existingRooms: Room[]): Promise<Room[]> {
+  const existingMap = new Map<string, Room>();
+  existingRooms.forEach(r => {
+    existingMap.set(r.roomNumber, r);
+    existingMap.set(r.roomId, r);
+  });
+
+  const updatedRooms: Room[] = [];
+  const missingRoomsToCreate: Room[] = [];
+
+  for (const item of OFFICIAL_ROOM_INVENTORY) {
+    const existing = existingMap.get(item.roomNumber);
+    if (existing) {
+      const merged: Room = {
+        ...existing,
+        floor: item.floor,
+      };
+      updatedRooms.push(merged);
+    } else {
+      const newRoomId = `room-${item.roomNumber}`;
+      const newRoom: Room = {
+        roomId: newRoomId,
+        roomNumber: item.roomNumber,
+        roomType: item.defaultType,
+        floor: item.floor,
+        capacityAdults: 2,
+        capacityChildren: 1,
+        maxAdults: 3,
+        maxChildren: 2,
+        planType: item.defaultPlan,
+        tariff: item.defaultTariff,
+        status: 'Available',
+        amenities: ['Air Conditioning', 'LED TV', 'Free Wi-Fi', 'Attached Bathroom'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      missingRoomsToCreate.push(newRoom);
+      updatedRooms.push(newRoom);
+    }
+  }
+
+  // Sort by room number numerically
+  updatedRooms.sort((a, b) => parseInt(a.roomNumber, 10) - parseInt(b.roomNumber, 10));
+
+  if (missingRoomsToCreate.length > 0) {
+    localFallbackStore.saveRooms(updatedRooms);
+    Promise.all(
+      missingRoomsToCreate.map(async (r) => {
+        try {
+          const roomRef = doc(db, ROOMS_COLLECTION, r.roomId);
+          await setDoc(roomRef, {
+            ...r,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        } catch (e) {
+          // Handled via local fallback
+        }
+      })
+    ).catch(err => console.warn('Non-blocking inventory sync warning:', err));
+  }
+
+  return updatedRooms;
+}
+
 export async function getRooms(): Promise<Room[]> {
+  let rooms: Room[] = [];
   try {
     const q = query(collection(db, ROOMS_COLLECTION), orderBy('roomNumber', 'asc'));
     const snapshot = await getDocs(q);
-    const rooms = snapshot.docs.map(d => ({ roomId: d.id, ...d.data() })) as Room[];
-    localFallbackStore.saveRooms(rooms);
-    return rooms;
+    rooms = snapshot.docs.map(d => ({ roomId: d.id, ...d.data() })) as Room[];
   } catch (error) {
     try {
       const snap = await getDocs(collection(db, ROOMS_COLLECTION));
-      const rooms = snap.docs.map(d => ({ roomId: d.id, ...d.data() })) as Room[];
-      localFallbackStore.saveRooms(rooms);
-      return rooms;
+      rooms = snap.docs.map(d => ({ roomId: d.id, ...d.data() })) as Room[];
     } catch (e) {
-      // Permission or network error -> use local fallback
+      rooms = localFallbackStore.getRooms();
     }
-    return localFallbackStore.getRooms();
   }
+
+  if (rooms.length === 0) {
+    rooms = localFallbackStore.getRooms();
+  }
+
+  const synced = await syncOfficialInventory(rooms);
+  localFallbackStore.saveRooms(synced);
+  return synced;
 }
 
 export async function updateRoomStatus(
@@ -53,6 +164,11 @@ export async function updateRoomStatus(
     payload.currentGuestName = stayInfo.guestName || null;
     payload.currentCheckInDate = stayInfo.checkInDate || null;
     payload.currentExpectedCheckOut = stayInfo.expectedCheckOut || null;
+  } else if (status === 'Reserved' && stayInfo) {
+    payload.currentStayId = stayInfo.stayId || null;
+    payload.currentGuestName = stayInfo.guestName || null;
+    payload.currentCheckInDate = stayInfo.checkInDate || null;
+    payload.currentExpectedCheckOut = stayInfo.expectedCheckOut || null;
   } else if (status === 'Available') {
     payload.currentStayId = null;
     payload.currentGuestName = null;
@@ -62,7 +178,7 @@ export async function updateRoomStatus(
 
   // Update local store immediately
   const localRooms = localFallbackStore.getRooms();
-  const found = localRooms.find(r => r.roomId === roomId);
+  const found = localRooms.find(r => r.roomId === roomId || r.roomNumber === roomId);
   if (found) {
     localFallbackStore.updateRoom({ ...found, ...payload });
   }
@@ -82,7 +198,7 @@ export async function updateRoomStatus(
     userEmail,
     entityType: 'room',
     entityId: roomId,
-    description: `Room ${roomId} status changed to ${status}`,
+    description: `Room ${found?.roomNumber || roomId} status changed to ${status}`,
   });
 }
 
@@ -95,12 +211,12 @@ export async function createRoom(roomData: Partial<Room>, userEmail = 'admin'): 
     floor: roomData.floor || '1st Floor',
     capacityAdults: roomData.capacityAdults || 2,
     capacityChildren: roomData.capacityChildren || 1,
-    maxAdults: roomData.capacityAdults || 2,
-    maxChildren: roomData.capacityChildren || 1,
+    maxAdults: roomData.maxAdults || 3,
+    maxChildren: roomData.maxChildren || 2,
     planType: roomData.planType || 'EP',
     tariff: roomData.tariff || 1500,
     status: roomData.status || 'Available',
-    amenities: roomData.amenities || ['AC', 'TV'],
+    amenities: roomData.amenities || ['Air Conditioning', 'LED TV', 'Free Wi-Fi', 'Attached Bathroom'],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -131,7 +247,7 @@ export async function createRoom(roomData: Partial<Room>, userEmail = 'admin'): 
 
 export async function updateRoom(roomId: string, roomData: Partial<Room>, userEmail = 'admin'): Promise<void> {
   const localRooms = localFallbackStore.getRooms();
-  const found = localRooms.find(r => r.roomId === roomId);
+  const found = localRooms.find(r => r.roomId === roomId || r.roomNumber === roomId);
   if (found) {
     localFallbackStore.updateRoom({ ...found, ...roomData, updatedAt: new Date().toISOString() });
   }
