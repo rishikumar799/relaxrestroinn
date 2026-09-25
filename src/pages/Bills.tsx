@@ -16,7 +16,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { Bill, HotelSettings } from '../types';
-import { getBills, searchBills, cancelBill, deleteBill } from '../services/billService';
+import { getBills, searchBills, cancelBill, deleteBill, subscribeToBills } from '../services/billService';
 import { downloadBillPDF } from '../utils/pdfGenerator';
 import { formatINR } from '../utils/currency';
 import { formatDateForDisplay } from '../utils/date';
@@ -69,7 +69,17 @@ export const Bills: React.FC<BillsProps> = ({
 
   useEffect(() => {
     loadAllBills();
-  }, []);
+
+    const unsub = subscribeToBills((liveBills) => {
+      // If active filter is on, re-apply filter, else set bills
+      if (!searchTerm && statusFilter === 'all' && typeFilter === 'all' && !startDate && !endDate) {
+        setBills(liveBills);
+        setLoading(false);
+      }
+    });
+
+    return () => unsub();
+  }, [searchTerm, statusFilter, typeFilter, startDate, endDate]);
 
   const handleApplyFilter = async () => {
     try {

@@ -19,9 +19,9 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { Room, RoomStatus, PlanType, HotelSettings, Reservation, Stay } from '../types';
-import { getRooms, updateRoomStatus, createRoom, updateRoom } from '../services/roomService';
-import { getReservations } from '../services/reservationService';
-import { getActiveStays } from '../services/stayService';
+import { getRooms, updateRoomStatus, createRoom, updateRoom, subscribeToRooms } from '../services/roomService';
+import { getReservations, subscribeToReservations } from '../services/reservationService';
+import { getActiveStays, subscribeToActiveStays } from '../services/stayService';
 import { formatINR } from '../utils/currency';
 import { formatDateForDisplay } from '../utils/date';
 import { useToast } from '../components/common/Toast';
@@ -81,6 +81,25 @@ export const Rooms: React.FC<RoomsProps> = ({ settings, onCheckInRoom, onNavigat
 
   useEffect(() => {
     loadRoomsData();
+
+    const unsubRooms = subscribeToRooms((roomsData) => {
+      setRooms(roomsData);
+      setLoading(false);
+    });
+
+    const unsubStays = subscribeToActiveStays((staysData) => {
+      setActiveStays(staysData);
+    });
+
+    const unsubRes = subscribeToReservations((resData) => {
+      setReservations(resData);
+    });
+
+    return () => {
+      unsubRooms();
+      unsubStays();
+      unsubRes();
+    };
   }, []);
 
   const handleOpenEdit = (room: Room, e?: React.MouseEvent) => {

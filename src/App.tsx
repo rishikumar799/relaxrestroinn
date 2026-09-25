@@ -4,9 +4,8 @@ import { auth } from './services/firebase';
 import { logoutAdmin } from './services/authService';
 import { HotelSettings, Bill, Stay, Room } from './types';
 import { getHotelSettings } from './services/settingsService';
-import { getActiveStays } from './services/stayService';
-import { getRooms } from './services/roomService';
-import { purgeAllDataAndStartFresh } from './services/dataResetService';
+import { getActiveStays, subscribeToActiveStays } from './services/stayService';
+import { getRooms, subscribeToRooms } from './services/roomService';
 
 // Layout & Common Components
 import { Header } from './components/common/Header';
@@ -71,36 +70,32 @@ const MainApp: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
-  // Fetch initial settings & counts
   const loadInitialSettingsAndCounts = async () => {
     try {
-      // Check if one-time clean-slate purge requested
-      if (localStorage.getItem('rri_clean_slate_init') !== 'true') {
-        try {
-          await purgeAllDataAndStartFresh();
-          localStorage.setItem('rri_clean_slate_init', 'true');
-        } catch (e) {
-          console.warn('Initial clean slate error:', e);
-        }
-      }
-
-      const [settingsData, staysData, roomsData] = await Promise.all([
-        getHotelSettings(),
-        getActiveStays(),
-        getRooms(),
-      ]);
-
-      setSettings(settingsData);
-      setActiveStaysCount(staysData.length);
-      setAvailableRoomsCount(roomsData.filter(r => r.status === 'Available').length);
-    } catch (err) {
-      console.error('Initial load error:', err);
+      const s = await getHotelSettings();
+      setSettings(s);
+    } catch (e) {
+      // ignore
     }
   };
 
+  // Real-time subscriptions for stays and rooms badges
   useEffect(() => {
     loadInitialSettingsAndCounts();
-  }, [user, currentPage]);
+
+    const unsubStays = subscribeToActiveStays((stays) => {
+      setActiveStaysCount(stays.length);
+    });
+
+    const unsubRooms = subscribeToRooms((roomsList) => {
+      setAvailableRoomsCount(roomsList.filter(r => r.status === 'Available').length);
+    });
+
+    return () => {
+      unsubStays();
+      unsubRooms();
+    };
+  }, [user]);
 
   const handleNavigate = (page: string, params?: any) => {
     setCurrentPage(page);
@@ -112,9 +107,11 @@ const MainApp: React.FC = () => {
     try {
       await logoutAdmin();
       setUser(null);
+      setCurrentPage('dashboard');
       toast.info('Logged Out', 'You have been signed out of the front desk.');
     } catch (err: any) {
-      toast.error('Logout Failed', err.message);
+      setUser(null);
+      toast.info('Logged Out', 'Signed out.');
     }
   };
 

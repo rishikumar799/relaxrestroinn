@@ -14,7 +14,7 @@ import {
   Plus
 } from 'lucide-react';
 import { Stay, Room, Bill, HotelSettings, PaymentMethod } from '../types';
-import { getActiveStays, getStayById } from '../services/stayService';
+import { getActiveStays, getStayById, subscribeToActiveStays } from '../services/stayService';
 import { createCheckoutBill } from '../services/billService';
 import { getTodayDateString, getCurrentTimeString, calculateDaysBetween, formatDateForDisplay, formatTime12H } from '../utils/date';
 import { formatINR, roundToTwo } from '../utils/currency';
@@ -59,7 +59,7 @@ export const CheckOut: React.FC<CheckOutProps> = ({
 
   const [showConfirmModal, setShowConfirmModal] = useState(false);
 
-  // Load Active Stays
+  // Load Active Stays and Subscribe to Real-time Changes
   useEffect(() => {
     const loadStays = async () => {
       try {
@@ -82,6 +82,17 @@ export const CheckOut: React.FC<CheckOutProps> = ({
       }
     };
     loadStays();
+
+    const unsub = subscribeToActiveStays((stays) => {
+      setActiveStays(stays);
+      setLoading(false);
+      if (preSelectedStayId) {
+        const match = stays.find(s => s.stayId === preSelectedStayId);
+        if (match) handleSelectStay(match);
+      }
+    });
+
+    return () => unsub();
   }, [preSelectedStayId]);
 
   const handleSelectStay = (stay: Stay) => {

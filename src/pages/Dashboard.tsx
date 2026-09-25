@@ -20,12 +20,12 @@ import {
   BookmarkCheck
 } from 'lucide-react';
 import { Bill, Room, Stay, HotelSettings, Payment, ActivityLog, Reservation } from '../types';
-import { getRooms } from '../services/roomService';
-import { getActiveStays } from '../services/stayService';
-import { getBills } from '../services/billService';
+import { getRooms, subscribeToRooms } from '../services/roomService';
+import { getActiveStays, subscribeToActiveStays } from '../services/stayService';
+import { getBills, subscribeToBills } from '../services/billService';
 import { getAllPayments } from '../services/paymentService';
 import { getRecentActivities } from '../services/activityService';
-import { getReservations } from '../services/reservationService';
+import { getReservations, subscribeToReservations } from '../services/reservationService';
 import { formatINR } from '../utils/currency';
 import { formatDateForDisplay, getTodayDateString, formatTime12H } from '../utils/date';
 
@@ -76,7 +76,33 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   useEffect(() => {
+    // Initial fetch
     loadDashboardData();
+
+    // Real-time Firestore subscriptions for instant live updates across all devices
+    const unsubRooms = subscribeToRooms((roomsData) => {
+      setRooms(roomsData);
+      setLoading(false);
+    });
+
+    const unsubStays = subscribeToActiveStays((staysData) => {
+      setActiveStays(staysData);
+    });
+
+    const unsubBills = subscribeToBills((billsData) => {
+      setRecentBills(billsData.slice(0, 20));
+    });
+
+    const unsubRes = subscribeToReservations((resData) => {
+      setReservations(resData);
+    });
+
+    return () => {
+      unsubRooms();
+      unsubStays();
+      unsubBills();
+      unsubRes();
+    };
   }, []);
 
   // Compute metrics purely from Firestore data

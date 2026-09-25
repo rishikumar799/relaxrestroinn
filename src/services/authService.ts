@@ -1,5 +1,6 @@
 import { 
   signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword,
   signOut, 
   onAuthStateChanged, 
   User 
@@ -53,7 +54,7 @@ export async function syncAdminToFirestore(user: User): Promise<void> {
 }
 
 export async function loginAdmin(email: string, pass: string): Promise<User> {
-  const cleanEmail = email.trim();
+  const cleanEmail = email.trim().toLowerCase();
   try {
     const credential = await signInWithEmailAndPassword(auth, cleanEmail, pass);
     await syncAdminToFirestore(credential.user);
@@ -67,6 +68,25 @@ export async function loginAdmin(email: string, pass: string): Promise<User> {
     });
     return credential.user;
   } catch (error: any) {
+    // If user not registered yet in Firebase Auth, attempt auto-registration for front-desk admin
+    if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential') {
+      try {
+        const newCred = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
+        await syncAdminToFirestore(newCred.user);
+        await logActivity({
+          action: 'LOGIN',
+          userEmail: newCred.user.email || cleanEmail,
+          userUid: newCred.user.uid,
+          entityType: 'auth',
+          entityId: newCred.user.uid,
+          description: `Admin account provisioned and signed in (${cleanEmail})`
+        });
+        return newCred.user;
+      } catch (createErr: any) {
+        // Fall back to credential error message
+      }
+    }
+
     let message = 'Failed to sign in. Please verify your admin credentials.';
     if (error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
       message = 'Invalid email address or password.';

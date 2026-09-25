@@ -105,17 +105,19 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="flex items-center gap-2 pl-2 border-l border-amber-200">
               <div className="hidden lg:flex flex-col text-right">
                 <span className="text-xs font-bold text-stone-900 truncate max-w-[130px]">
-                  {user?.email || 'admin'}
+                  {user?.email || 'admin@relaxrestoinn.com'}
                 </span>
                 <span className="text-[10px] text-amber-800 font-medium">Authorized Admin</span>
               </div>
 
               <button
+                type="button"
                 onClick={onLogout}
                 title="Log out of Relax Resto Inn"
-                className="p-2 text-stone-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-stone-700 hover:text-red-700 hover:bg-red-50 border border-stone-200 hover:border-red-300 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-2xs"
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="w-3.5 h-3.5 text-red-600" />
+                <span className="hidden sm:inline">Logout</span>
               </button>
             </div>
           </div>

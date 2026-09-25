@@ -18,10 +18,10 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { Stay, Bill, HotelSettings, Room, Reservation } from '../types';
-import { getRooms } from '../services/roomService';
-import { getStays } from '../services/stayService';
-import { getBills } from '../services/billService';
-import { getReservations } from '../services/reservationService';
+import { getRooms, subscribeToRooms } from '../services/roomService';
+import { getStays, subscribeToActiveStays } from '../services/stayService';
+import { getBills, subscribeToBills } from '../services/billService';
+import { getReservations, subscribeToReservations } from '../services/reservationService';
 import { formatINR } from '../utils/currency';
 import { formatDateForDisplay, formatTime12H, getTodayDateString } from '../utils/date';
 import { downloadBillPDF } from '../utils/pdfGenerator';
@@ -76,6 +76,30 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
   useEffect(() => {
     loadData();
+
+    const unsubRooms = subscribeToRooms((roomsList) => {
+      setRooms(roomsList);
+      setLoading(false);
+    });
+
+    const unsubStays = subscribeToActiveStays((staysList) => {
+      setStays(staysList);
+    });
+
+    const unsubBills = subscribeToBills((billsList) => {
+      setBills(billsList);
+    });
+
+    const unsubRes = subscribeToReservations((resList) => {
+      setReservations(resList);
+    });
+
+    return () => {
+      unsubRooms();
+      unsubStays();
+      unsubBills();
+      unsubRes();
+    };
   }, []);
 
   const handleDownloadPDF = async (bill: Bill, e?: React.MouseEvent) => {
