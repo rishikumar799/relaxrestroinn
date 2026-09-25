@@ -237,8 +237,15 @@ export interface TaxSummaryItem {
   accountName?: string;
   taxName: string; // e.g. Sgst@2.5, Cgst@2.5, Cgst@6, Sgst@6, Igst@12
   taxRate?: number;
+  rate?: number;
+  hsn?: string;
   taxableAmount: number;
+  taxable?: number;
   taxAmount: number;
+  totalTax?: number;
+  cgst?: number;
+  sgst?: number;
+  igst?: number;
 }
 
 export interface Bill {
@@ -247,7 +254,7 @@ export interface Bill {
   billDate: string; // YYYY-MM-DD
   billTime?: string;
   billType: 'stay' | 'manual';
-  status: 'paid' | 'pending' | 'partially_paid' | 'void';
+  status: 'paid' | 'pending' | 'partially_paid' | 'void' | 'cancelled';
   guestId?: string;
   stayId?: string;
   guestName: string;
@@ -373,6 +380,7 @@ export interface ActivityLog {
     | 'MANUAL_BILL_CREATED' 
     | 'BILL_PRINTED' 
     | 'BILL_VOIDED' 
+    | 'BILL_CANCELLED'
     | 'BILL_DELETED' 
     | 'SETTINGS_UPDATED' 
     | 'ROOM_STATUS_CHANGED' 

@@ -6,6 +6,7 @@ import { HotelSettings, Bill, Stay, Room } from './types';
 import { getHotelSettings } from './services/settingsService';
 import { getActiveStays } from './services/stayService';
 import { getRooms } from './services/roomService';
+import { purgeAllDataAndStartFresh } from './services/dataResetService';
 
 // Layout & Common Components
 import { Header } from './components/common/Header';
@@ -73,6 +74,16 @@ const MainApp: React.FC = () => {
   // Fetch initial settings & counts
   const loadInitialSettingsAndCounts = async () => {
     try {
+      // Check if one-time clean-slate purge requested
+      if (localStorage.getItem('rri_clean_slate_init') !== 'true') {
+        try {
+          await purgeAllDataAndStartFresh();
+          localStorage.setItem('rri_clean_slate_init', 'true');
+        } catch (e) {
+          console.warn('Initial clean slate error:', e);
+        }
+      }
+
       const [settingsData, staysData, roomsData] = await Promise.all([
         getHotelSettings(),
         getActiveStays(),

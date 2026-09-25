@@ -16,7 +16,8 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { Bill, HotelSettings } from '../types';
-import { getBills, searchBills, voidBill, deleteBill } from '../services/billService';
+import { getBills, searchBills, cancelBill, deleteBill } from '../services/billService';
+import { downloadBillPDF } from '../utils/pdfGenerator';
 import { formatINR } from '../utils/currency';
 import { formatDateForDisplay } from '../utils/date';
 import { generateBillCSV } from '../services/reportService';
@@ -108,13 +109,13 @@ export const Bills: React.FC<BillsProps> = ({
 
     try {
       setVoiding(true);
-      await voidBill(billToVoid.billId, voidReason.trim());
-      toast.success('Invoice Voided', `Bill #${billToVoid.billNo} has been voided.`);
+      await cancelBill(billToVoid.billId, voidReason.trim());
+      toast.success('Invoice Cancelled', `Bill #${billToVoid.billNo} has been cancelled.`);
       setBillToVoid(null);
       setVoidReason('');
       loadAllBills();
     } catch (err: any) {
-      toast.error('Void Failed', err.message || 'Could not void bill.');
+      toast.error('Cancellation Failed', err.message || 'Could not cancel bill.');
     } finally {
       setVoiding(false);
     }
@@ -389,6 +390,14 @@ export const Bills: React.FC<BillsProps> = ({
                             className="p-1.5 bg-stone-900 hover:bg-stone-800 text-amber-300 rounded-lg transition-colors cursor-pointer"
                           >
                             <Eye className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            onClick={() => downloadBillPDF(bill, settings)}
+                            title="Download Vector A4 PDF"
+                            className="p-1.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-lg transition-all cursor-pointer shadow-xs"
+                          >
+                            <Download className="w-3.5 h-3.5" />
                           </button>
 
                           {!isVoid && (

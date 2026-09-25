@@ -12,7 +12,10 @@ import {
   Sparkles,
   BookmarkCheck,
   Grid,
-  CalendarDays
+  CalendarDays,
+  Download,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 import { Stay, Bill, HotelSettings, Room, Reservation } from '../types';
 import { getRooms } from '../services/roomService';
@@ -21,6 +24,8 @@ import { getBills } from '../services/billService';
 import { getReservations } from '../services/reservationService';
 import { formatINR } from '../utils/currency';
 import { formatDateForDisplay, formatTime12H, getTodayDateString } from '../utils/date';
+import { downloadBillPDF } from '../utils/pdfGenerator';
+import { useToast } from '../components/common/Toast';
 
 interface CalendarViewProps {
   settings?: HotelSettings;
@@ -33,6 +38,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   onViewBill,
   onCheckIn,
 }) => {
+  const toast = useToast();
   const [viewMode, setViewMode] = useState<'timeline' | 'month'>('timeline');
   const [timelineStartDate, setTimelineStartDate] = useState(new Date());
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -41,34 +47,49 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   const [stays, setStays] = useState<Stay[]>([]);
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
+  const [downloadingBillId, setDownloadingBillId] = useState<string | null>(null);
   const [selectedDateStr, setSelectedDateStr] = useState<string>(
     new Date().toISOString().split('T')[0]
   );
 
   const todayStr = getTodayDateString();
 
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      const [roomsList, allStays, allBills, allRes] = await Promise.all([
+        getRooms(),
+        getStays(300),
+        getBills(300),
+        getReservations(),
+      ]);
+      setRooms(roomsList);
+      setStays(allStays);
+      setBills(allBills);
+      setReservations(allRes);
+    } catch (err) {
+      console.error('Calendar load data error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        setLoading(true);
-        const [roomsList, allStays, allBills, allRes] = await Promise.all([
-          getRooms(),
-          getStays(300),
-          getBills(300),
-          getReservations(),
-        ]);
-        setRooms(roomsList);
-        setStays(allStays);
-        setBills(allBills);
-        setReservations(allRes);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    };
     loadData();
   }, []);
+
+  const handleDownloadPDF = async (bill: Bill, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    try {
+      setDownloadingBillId(bill.billId);
+      await downloadBillPDF(bill, settings);
+      toast.success('Bill Downloaded', `Invoice ${bill.billNo} downloaded successfully.`);
+    } catch (err) {
+      toast.error('Download Failed', 'Could not generate PDF.');
+    } finally {
+      setDownloadingBillId(null);
+    }
+  };
 
   // Timeline columns: 14 consecutive days starting from timelineStartDate
   const timelineDaysCount = 14;
@@ -124,6 +145,22 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   const selectedReservations = reservations.filter(r => r.checkInDate === selectedDateStr && (r.status === 'CONFIRMED' || r.status === 'PENDING'));
   const selectedBills = bills.filter(b => b.billDate === selectedDateStr);
 
+  // Live Occupancy Calculations for selected Date
+  const totalRoomsCount = rooms.length || 24;
+  const occupiedOnSelectedDate = stays.filter(s => 
+    s.status === 'active' && s.checkInDate <= selectedDateStr && (s.expectedCheckOutDate > selectedDateStr || s.expectedCheckOutDate === s.checkInDate)
+  ).length;
+  const reservedOnSelectedDate = reservations.filter(r => 
+    (r.status === 'CONFIRMED' || r.status === 'PENDING') && r.checkInDate <= selectedDateStr && r.checkOutDate > selectedDateStr
+  ).length;
+  const bookedOnSelectedDate = occupiedOnSelectedDate + reservedOnSelectedDate;
+  const availableOnSelectedDate = Math.max(0, totalRoomsCount - bookedOnSelectedDate);
+
+  // Overall Live Summary Today
+  const todayOccupiedCount = rooms.filter(r => r.status === 'Occupied').length;
+  const todayReservedCount = rooms.filter(r => r.status === 'Reserved').length;
+  const todayAvailableCount = rooms.filter(r => r.status === 'Available').length;
+
   const floorOrder = ['1st Floor', '2nd Floor', '3rd Floor'];
 
   return (
@@ -132,10 +169,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
           <h1 className="text-xl sm:text-2xl font-black text-amber-950 font-['Outfit',sans-serif]">
-            Room Availability & Booking Schedule
+            Room Availability & Calendar
           </h1>
           <p className="text-xs text-stone-600 mt-0.5">
-            Real-time room occupancy timeline and monthly arrivals calendar
+            Real-time room occupancy timeline, day-wise bookings, and direct invoice downloads
           </p>
         </div>
 
@@ -173,6 +210,53 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             <UserPlus className="w-4 h-4" />
             <span>New Check-in</span>
           </button>
+        </div>
+      </div>
+
+      {/* Real Live Occupancy Summary Metrics */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[#FFFDF9] p-4 rounded-2xl border border-amber-200/80 shadow-xs">
+        <div className="flex items-center gap-3 p-2 bg-stone-50 rounded-xl border border-stone-200/60">
+          <div className="p-2.5 rounded-xl bg-stone-900 text-amber-300">
+            <BedDouble className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-[10px] uppercase font-bold text-stone-500">Total Rooms</div>
+            <div className="text-xl font-black text-stone-900 font-['Outfit',sans-serif]">{totalRoomsCount}</div>
+            <div className="text-[10px] text-stone-500">Across 3 Floors</div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 p-2 bg-orange-50/70 rounded-xl border border-orange-200/60">
+          <div className="p-2.5 rounded-xl bg-orange-600 text-white">
+            <Users className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-[10px] uppercase font-bold text-orange-800">Booked / Occupied</div>
+            <div className="text-xl font-black text-orange-950 font-['Outfit',sans-serif]">{todayOccupiedCount}</div>
+            <div className="text-[10px] text-orange-700 font-semibold">{totalRoomsCount > 0 ? `${Math.round((todayOccupiedCount / totalRoomsCount) * 100)}% occupied` : '0%'}</div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 p-2 bg-emerald-50/70 rounded-xl border border-emerald-200/60">
+          <div className="p-2.5 rounded-xl bg-emerald-600 text-white">
+            <CheckCircle2 className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-[10px] uppercase font-bold text-emerald-800">Available / Left</div>
+            <div className="text-xl font-black text-emerald-900 font-['Outfit',sans-serif]">{todayAvailableCount}</div>
+            <div className="text-[10px] text-emerald-700 font-semibold">Ready for check-in</div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 p-2 bg-blue-50/70 rounded-xl border border-blue-200/60">
+          <div className="p-2.5 rounded-xl bg-blue-600 text-white">
+            <BookmarkCheck className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-[10px] uppercase font-bold text-blue-800">Reservations</div>
+            <div className="text-xl font-black text-blue-950 font-['Outfit',sans-serif]">{todayReservedCount}</div>
+            <div className="text-[10px] text-blue-700 font-semibold">Upcoming bookings</div>
+          </div>
         </div>
       </div>
 
@@ -265,7 +349,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                             {timelineDates.map((td) => {
                               // Check if stay exists on this date
                               const matchingStay = stays.find(
-                                s => s.roomId === r.roomId && s.status === 'active' && s.checkInDate <= td.dateStr && s.expectedCheckOutDate > td.dateStr
+                                s => s.roomId === r.roomId && s.status === 'active' && s.checkInDate <= td.dateStr && (s.expectedCheckOutDate > td.dateStr || s.expectedCheckOutDate === s.checkInDate)
                               );
 
                               // Check if reservation exists
@@ -389,6 +473,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                 const dayArrivals = stays.filter(s => s.checkInDate === item.dateString);
                 const dayDepartures = stays.filter(s => s.expectedCheckOutDate === item.dateString || s.actualCheckOutDate === item.dateString);
                 const dayRes = reservations.filter(r => r.checkInDate === item.dateString && (r.status === 'CONFIRMED' || r.status === 'PENDING'));
+                const dayBills = bills.filter(b => b.billDate === item.dateString);
                 const isToday = item.dateString === todayStr;
                 const isSelected = item.dateString === selectedDateStr;
 
@@ -422,6 +507,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           +{dayRes.length} Res
                         </div>
                       )}
+                      {dayBills.length > 0 && (
+                        <div className="text-[9px] font-bold text-emerald-800 bg-emerald-100 rounded px-1 truncate">
+                          {dayBills.length} Bill{dayBills.length > 1 ? 's' : ''}
+                        </div>
+                      )}
                       {dayDepartures.length > 0 && (
                         <div className="text-[9px] font-bold text-stone-700 bg-stone-100 rounded px-1 truncate">
                           -{dayDepartures.length} Out
@@ -441,6 +531,57 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               <h3 className="font-extrabold text-base text-stone-900 font-['Outfit',sans-serif]">
                 {formatDateForDisplay(selectedDateStr)}
               </h3>
+              {/* Day Occupancy Breakdown */}
+              <div className="mt-2 flex items-center justify-between text-xs bg-amber-50/70 p-2 rounded-xl border border-amber-200/60">
+                <span className="font-bold text-stone-700">Room Status on this Day:</span>
+                <span className="font-bold text-orange-950">
+                  <span className="text-orange-700">{bookedOnSelectedDate} Booked</span> • <span className="text-emerald-700">{availableOnSelectedDate} Left</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Generated Invoices on Selected Date */}
+            <div>
+              <h4 className="text-xs font-bold text-emerald-900 flex items-center gap-1 mb-2">
+                <Receipt className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Tax Invoices Generated ({selectedBills.length})</span>
+              </h4>
+              {selectedBills.length === 0 ? (
+                <p className="text-xs text-stone-400 italic">No invoices issued on this date</p>
+              ) : (
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  {selectedBills.map(b => (
+                    <div key={b.billId} className="p-2.5 rounded-xl bg-emerald-50/80 border border-emerald-200 text-xs flex flex-col gap-1.5 shadow-2xs">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="font-black text-stone-900 font-mono">{b.billNo}</div>
+                          <div className="font-semibold text-stone-800">{b.guestName} (Room {b.roomNumber})</div>
+                        </div>
+                        <div className="font-black font-mono text-stone-900 text-right">
+                          {formatINR(b.grossTotal)}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 pt-1 border-t border-emerald-200/60">
+                        <button
+                          onClick={() => onViewBill(b)}
+                          className="flex-1 inline-flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-stone-900 hover:bg-stone-800 text-amber-300 text-[11px] font-bold cursor-pointer"
+                        >
+                          <Eye className="w-3 h-3" />
+                          <span>View Bill</span>
+                        </button>
+                        <button
+                          onClick={(e) => handleDownloadPDF(b, e)}
+                          disabled={downloadingBillId === b.billId}
+                          className="flex-1 inline-flex items-center justify-center gap-1 py-1 px-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                        >
+                          <Download className="w-3 h-3" />
+                          <span>{downloadingBillId === b.billId ? 'Exporting...' : 'Download PDF'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Arrivals */}
@@ -454,9 +595,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               ) : (
                 <div className="space-y-1.5 max-h-36 overflow-y-auto">
                   {selectedArrivals.map(s => (
-                    <div key={s.stayId} className="p-2 rounded-lg bg-orange-50 border border-orange-200 text-xs">
-                      <div className="font-bold text-stone-900">{s.guestName}</div>
-                      <div className="text-[10px] text-stone-600">Room {s.roomNumber} ({s.roomType})</div>
+                    <div key={s.stayId} className="p-2 rounded-lg bg-orange-50 border border-orange-200 text-xs flex justify-between items-center">
+                      <div>
+                        <div className="font-bold text-stone-900">{s.guestName}</div>
+                        <div className="text-[10px] text-stone-600">Room {s.roomNumber} ({s.roomType})</div>
+                      </div>
+                      <div className="text-[11px] font-mono text-orange-950 font-bold">
+                        {formatINR(s.roomTariff)}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -494,9 +640,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               ) : (
                 <div className="space-y-1.5 max-h-36 overflow-y-auto">
                   {selectedDepartures.map(s => (
-                    <div key={s.stayId} className="p-2 rounded-lg bg-stone-50 border border-stone-200 text-xs">
-                      <div className="font-bold text-stone-900">{s.guestName}</div>
-                      <div className="text-[10px] text-stone-600">Room {s.roomNumber} • Bal: {formatINR(s.balanceDue)}</div>
+                    <div key={s.stayId} className="p-2 rounded-lg bg-stone-50 border border-stone-200 text-xs flex justify-between items-center">
+                      <div>
+                        <div className="font-bold text-stone-900">{s.guestName}</div>
+                        <div className="text-[10px] text-stone-600">Room {s.roomNumber} • Bal: {formatINR(s.balanceDue)}</div>
+                      </div>
                     </div>
                   ))}
                 </div>

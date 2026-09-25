@@ -13,13 +13,17 @@ import {
   Clock,
   Sparkles,
   Copy,
-  ExternalLink
+  ExternalLink,
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
 import { HotelSettings } from '../types';
 import { getHotelSettings, saveHotelSettings } from '../services/settingsService';
 import { exportAllData } from '../services/reportService';
 import { getAdminUsers, getCurrentUser, AdminUserRecord } from '../services/authService';
+import { purgeAllDataAndStartFresh } from '../services/dataResetService';
 import { useToast } from '../components/common/Toast';
+import { ConfirmationModal } from '../components/common/ConfirmationModal';
 
 interface SettingsProps {
   settings?: HotelSettings;
@@ -31,6 +35,8 @@ export const Settings: React.FC<SettingsProps> = ({ settings: initialSettings, o
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>([]);
+  const [showPurgeModal, setShowPurgeModal] = useState(false);
+  const [isPurging, setIsPurging] = useState(false);
 
   useEffect(() => {
     getAdminUsers().then(users => setAdminUsers(users)).catch(() => {});
@@ -540,7 +546,7 @@ export const Settings: React.FC<SettingsProps> = ({ settings: initialSettings, o
       <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200/80 shadow-xs p-5 space-y-4">
         <div className="flex items-center gap-2 border-b border-amber-100 pb-3 text-amber-950 font-bold font-['Outfit',sans-serif] text-sm">
           <SettingsIcon className="w-4 h-4 text-orange-600" />
-          <span>System Utilities & Data Backups</span>
+          <span>System Utilities & Data Management</span>
         </div>
 
         <div className="grid grid-cols-1 gap-4">
@@ -561,8 +567,53 @@ export const Settings: React.FC<SettingsProps> = ({ settings: initialSettings, o
               <span>{exporting ? 'Generating...' : 'Export JSON Backup'}</span>
             </button>
           </div>
+
+          {/* Start From Scratch / Reset Data */}
+          <div className="p-4 rounded-xl bg-red-50/70 border border-red-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-1.5 text-red-900 font-bold text-xs">
+                <AlertTriangle className="w-4 h-4 text-red-600" />
+                <span>Reset All Entries & Start From Scratch</span>
+              </div>
+              <p className="text-[11px] text-red-700 mt-0.5">
+                Permanently wipes all check-ins, check-outs, reservations, and sample bills from Firestore and local store. All 24 official rooms will be reset to available.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowPurgeModal(true)}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer shrink-0"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Start Fresh (Purge Entries)</span>
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Confirmation Modal for Starting Fresh */}
+      <ConfirmationModal
+        isOpen={showPurgeModal}
+        title="Reset All Entries & Start from Scratch?"
+        message="This will permanently delete all check-in records, check-out history, test bills, payments, and reservations. All 24 rooms will be reset to Available. This action cannot be undone."
+        confirmText={isPurging ? 'Purging records...' : 'Yes, Delete All & Start Fresh'}
+        cancelText="Cancel"
+        variant="danger"
+        onConfirm={async () => {
+          try {
+            setIsPurging(true);
+            await purgeAllDataAndStartFresh();
+            toast.success('System Reset Complete', 'All previous entries purged. Starting clean from scratch!');
+            setShowPurgeModal(false);
+            window.location.reload();
+          } catch (err: any) {
+            toast.error('Reset Failed', err?.message || 'Could not reset database.');
+          } finally {
+            setIsPurging(false);
+          }
+        }}
+        onCancel={() => setShowPurgeModal(false)}
+      />
     </div>
   );
 };

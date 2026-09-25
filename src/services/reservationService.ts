@@ -10,7 +10,8 @@ import {
   orderBy, 
   limit, 
   serverTimestamp,
-  runTransaction 
+  onSnapshot,
+  Unsubscribe 
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { Reservation, ReservationStatus, Room, Stay, Payment, PaymentMethod } from '../types';
@@ -22,14 +23,51 @@ import { saveOrUpdateGuest } from './guestService';
 import { localFallbackStore } from './localFallbackStore';
 import { calculateDaysBetween, getTodayDateString, getCurrentTimeString } from '../utils/date';
 
-const RESERVATIONS_COLLECTION = 'reservations';
-const STAYS_COLLECTION = 'stays';
-const ROOMS_COLLECTION = 'rooms';
+export const RESERVATIONS_COLLECTION = 'reservations';
 
 /**
- * Checks if two date ranges [startA, endA] and [startB, endB] overlap.
- * Hotel standard rule: Overlaps if startA < endB and endA > startB.
- * Allows same-day turnover (e.g. checkout 27th, checkin 27th).
+ * Normalizes time string to HH:mm 24-hour format
+ */
+function normalizeTime(t?: string, defaultTime = '12:00'): string {
+  if (!t || !t.trim()) return defaultTime;
+  const parts = t.trim().split(':');
+  const h = parts[0].padStart(2, '0');
+  const m = (parts[1] || '00').padStart(2, '0');
+  return `${h}:${m}`;
+}
+
+/**
+ * Checks if two date+time intervals overlap:
+ * Interval A: [startA_date + startA_time, endA_date + endA_time]
+ * Interval B: [startB_date + startB_time, endB_date + endB_time]
+ * Overlaps if A_start < B_end and A_end > B_start.
+ * Supports same-day stays and turnaround (e.g. 8:00 AM - 8:30 AM vs 9:00 AM - 10:00 AM on same date do NOT overlap!).
+ */
+export function isDateTimeRangeOverlapping(
+  startA_date: string,
+  startA_time: string,
+  endA_date: string,
+  endA_time: string,
+  startB_date: string,
+  startB_time: string,
+  endB_date: string,
+  endB_time: string
+): boolean {
+  const normTimeAStart = normalizeTime(startA_time, '12:00');
+  const normTimeAEnd = normalizeTime(endA_time, '11:00');
+  const normTimeBStart = normalizeTime(startB_time, '12:00');
+  const normTimeBEnd = normalizeTime(endB_time, '11:00');
+
+  const dtAStart = `${startA_date}T${normTimeAStart}`;
+  const dtAEnd = `${endA_date}T${normTimeAEnd}`;
+  const dtBStart = `${startB_date}T${normTimeBStart}`;
+  const dtBEnd = `${endB_date}T${normTimeBEnd}`;
+
+  return dtAStart < dtBEnd && dtAEnd > dtBStart;
+}
+
+/**
+ * Legacy date-only overlap checker
  */
 export function isDateRangeOverlapping(
   startA: string, 
@@ -37,11 +75,11 @@ export function isDateRangeOverlapping(
   startB: string, 
   endB: string
 ): boolean {
-  return startA < endB && endA > startB;
+  return isDateTimeRangeOverlapping(startA, '12:00', endA, '11:00', startB, '12:00', endB, '11:00');
 }
 
 /**
- * Fetch all reservations from Firestore (with local fallback)
+ * Fetch all reservations from Firestore
  */
 export async function getReservations(params?: {
   startDate?: string;
@@ -92,6 +130,30 @@ export async function getReservations(params?: {
 }
 
 /**
+ * Realtime subscription to reservations
+ */
+export function subscribeToReservations(onUpdate: (reservations: Reservation[]) => void): Unsubscribe {
+  try {
+    const q = query(
+      collection(db, RESERVATIONS_COLLECTION),
+      orderBy('checkInDate', 'desc'),
+      limit(200)
+    );
+    return onSnapshot(q, (snapshot) => {
+      const resList = snapshot.docs.map(d => ({ reservationId: d.id, ...d.data() })) as Reservation[];
+      localFallbackStore.saveReservations(resList);
+      onUpdate(resList);
+    }, (err) => {
+      console.warn('Reservations subscription error:', err);
+      getReservations().then(onUpdate).catch(() => {});
+    });
+  } catch (e) {
+    getReservations().then(onUpdate).catch(() => {});
+    return () => {};
+  }
+}
+
+/**
  * Get a single reservation by ID
  */
 export async function getReservationById(reservationId: string): Promise<Reservation | null> {
@@ -107,23 +169,37 @@ export async function getReservationById(reservationId: string): Promise<Reserva
 }
 
 /**
- * Check if a room is available for a given date range against Firestore.
- * Prevents double booking with existing active/confirmed reservations and active stays.
+ * Check if a room is available for a given date + time range against Firestore.
+ * Supports BOTH overnight stays and same-day turnaround stays.
  */
 export async function checkRoomAvailability(
   roomId: string,
   checkInDate: string,
   checkOutDate: string,
+  checkInTime = '12:00',
+  checkOutTime = '11:00',
   excludeReservationId?: string
 ): Promise<{ isAvailable: boolean; conflictReason?: string }> {
-  if (checkOutDate <= checkInDate) {
+  // 1. Basic validation
+  if (checkOutDate < checkInDate) {
     return {
       isAvailable: false,
-      conflictReason: 'Check-out date must be strictly after check-in date.',
+      conflictReason: 'Check-out date cannot be before check-in date.',
     };
   }
 
-  // 1. Fetch room operational status
+  if (checkOutDate === checkInDate) {
+    const normIn = normalizeTime(checkInTime, '12:00');
+    const normOut = normalizeTime(checkOutTime, '11:00');
+    if (normOut <= normIn) {
+      return {
+        isAvailable: false,
+        conflictReason: 'For a same-day stay, check-out time must be later than check-in time.',
+      };
+    }
+  }
+
+  // 2. Fetch room operational status
   const allRooms = await getRooms();
   const targetRoom = allRooms.find(r => r.roomId === roomId || r.roomNumber === roomId);
   if (!targetRoom) {
@@ -137,34 +213,52 @@ export async function checkRoomAvailability(
     return { isAvailable: false, conflictReason: `Room ${targetRoom.roomNumber} is currently Blocked.` };
   }
 
-  // 2. Check overlapping active stays in Firestore
+  // 3. Check overlapping active stays in Firestore
   const activeStays = await getActiveStays();
   const overlappingStay = activeStays.find(s => 
     s.roomId === targetRoom.roomId &&
     s.status === 'active' &&
-    isDateRangeOverlapping(checkInDate, checkOutDate, s.checkInDate, s.expectedCheckOutDate)
+    isDateTimeRangeOverlapping(
+      checkInDate, 
+      checkInTime, 
+      checkOutDate, 
+      checkOutTime, 
+      s.checkInDate, 
+      s.checkInTime || '12:00', 
+      s.expectedCheckOutDate, 
+      s.expectedCheckOutTime || '11:00'
+    )
   );
 
   if (overlappingStay) {
     return {
       isAvailable: false,
-      conflictReason: `Room ${targetRoom.roomNumber} is currently occupied by ${overlappingStay.guestName} until ${overlappingStay.expectedCheckOutDate}.`,
+      conflictReason: `Room ${targetRoom.roomNumber} is currently occupied by ${overlappingStay.guestName} (${overlappingStay.checkInDate} ${overlappingStay.checkInTime || ''} to ${overlappingStay.expectedCheckOutDate} ${overlappingStay.expectedCheckOutTime || ''}).`,
     };
   }
 
-  // 3. Check overlapping reservations in Firestore
+  // 4. Check overlapping reservations in Firestore
   const allReservations = await getReservations();
   const overlappingRes = allReservations.find(r => 
     r.roomId === targetRoom.roomId &&
     r.reservationId !== excludeReservationId &&
     (r.status === 'CONFIRMED' || r.status === 'PENDING') &&
-    isDateRangeOverlapping(checkInDate, checkOutDate, r.checkInDate, r.checkOutDate)
+    isDateTimeRangeOverlapping(
+      checkInDate, 
+      checkInTime, 
+      checkOutDate, 
+      checkOutTime, 
+      r.checkInDate, 
+      r.checkInTime || '12:00', 
+      r.checkOutDate, 
+      r.checkOutTime || '11:00'
+    )
   );
 
   if (overlappingRes) {
     return {
       isAvailable: false,
-      conflictReason: `Room ${targetRoom.roomNumber} is already reserved for ${overlappingRes.guestName} (${overlappingRes.checkInDate} to ${overlappingRes.checkOutDate}).`,
+      conflictReason: `Room ${targetRoom.roomNumber} is reserved for ${overlappingRes.guestName} (${overlappingRes.checkInDate} to ${overlappingRes.checkOutDate}).`,
     };
   }
 
@@ -172,11 +266,13 @@ export async function checkRoomAvailability(
 }
 
 /**
- * Search and categorize all 24 rooms for a given date range
+ * Search and categorize all 24 rooms for a given date + time range
  */
 export async function findAvailableRooms(
   checkInDate: string,
   checkOutDate: string,
+  checkInTime = '12:00',
+  checkOutTime = '11:00',
   excludeReservationId?: string
 ): Promise<{
   availableRooms: Room[];
@@ -205,7 +301,16 @@ export async function findAvailableRooms(
     const stayConflict = activeStays.find(s => 
       s.roomId === room.roomId &&
       s.status === 'active' &&
-      isDateRangeOverlapping(checkInDate, checkOutDate, s.checkInDate, s.expectedCheckOutDate)
+      isDateTimeRangeOverlapping(
+        checkInDate, 
+        checkInTime, 
+        checkOutDate, 
+        checkOutTime, 
+        s.checkInDate, 
+        s.checkInTime || '12:00', 
+        s.expectedCheckOutDate, 
+        s.expectedCheckOutTime || '11:00'
+      )
     );
 
     if (stayConflict) {
@@ -222,7 +327,16 @@ export async function findAvailableRooms(
       r.roomId === room.roomId &&
       r.reservationId !== excludeReservationId &&
       (r.status === 'CONFIRMED' || r.status === 'PENDING') &&
-      isDateRangeOverlapping(checkInDate, checkOutDate, r.checkInDate, r.checkOutDate)
+      isDateTimeRangeOverlapping(
+        checkInDate, 
+        checkInTime, 
+        checkOutDate, 
+        checkOutTime, 
+        r.checkInDate, 
+        r.checkInTime || '12:00', 
+        r.checkOutDate, 
+        r.checkOutTime || '11:00'
+      )
     );
 
     if (resConflict) {
@@ -250,26 +364,29 @@ export async function findAvailableRooms(
 }
 
 /**
- * Create a new future reservation with strict Firestore double-booking validation
+ * Create a new future or same-day reservation with strict Firestore double-booking validation
  */
 export async function createReservation(
   reservationData: Omit<Reservation, 'reservationId' | 'status' | 'createdAt' | 'updatedAt'>,
   userEmail = 'admin'
 ): Promise<Reservation> {
-  const { checkInDate, checkOutDate, roomId } = reservationData;
+  const { checkInDate, checkOutDate, checkInTime = '12:00', checkOutTime = '11:00', roomId } = reservationData;
 
-  // Strict date validation
-  if (checkOutDate <= checkInDate) {
-    throw new Error('Check-out date must be after check-in date.');
+  // Strict date & time validation
+  if (checkOutDate < checkInDate) {
+    throw new Error('Check-out date cannot be before check-in date.');
+  }
+  if (checkOutDate === checkInDate && normalizeTime(checkOutTime) <= normalizeTime(checkInTime)) {
+    throw new Error('For a same-day stay, check-out time must be later than check-in time.');
   }
 
-  // Pre-flight availability check
-  const availability = await checkRoomAvailability(roomId, checkInDate, checkOutDate);
+  // Pre-flight availability check against Firestore
+  const availability = await checkRoomAvailability(roomId, checkInDate, checkOutDate, checkInTime, checkOutTime);
   if (!availability.isAvailable) {
-    throw new Error(availability.conflictReason || `Room is not available for ${checkInDate} to ${checkOutDate}.`);
+    throw new Error(availability.conflictReason || `Room is not available for the requested period.`);
   }
 
-  // Save/update guest profile
+  // Save/update guest profile in Firestore
   const guest = await saveOrUpdateGuest({
     guestName: reservationData.guestName,
     phone: reservationData.guestPhone,
@@ -280,12 +397,15 @@ export async function createReservation(
   });
 
   const reservationId = `RES-${Date.now()}`;
-  const numberOfDays = calculateDaysBetween(checkInDate, checkOutDate) || 1;
+  const daysDiff = calculateDaysBetween(checkInDate, checkOutDate);
+  const numberOfDays = daysDiff > 0 ? daysDiff : 1; // Same-day is 1 day-use stay
 
   const fullReservation: Reservation = {
     ...reservationData,
     reservationId,
     guestId: guest.guestId,
+    checkInTime,
+    checkOutTime,
     numberOfDays,
     status: 'CONFIRMED',
     confirmedAt: new Date().toISOString(),
@@ -298,17 +418,13 @@ export async function createReservation(
   // 1. Save to local fallback
   localFallbackStore.saveReservation(fullReservation);
 
-  // 2. Save in Firestore
-  try {
-    const resRef = doc(db, RESERVATIONS_COLLECTION, reservationId);
-    await setDoc(resRef, {
-      ...fullReservation,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  } catch (err) {
-    console.error('Firestore save error, saved locally:', err);
-  }
+  // 2. Persist to Firestore
+  const resRef = doc(db, RESERVATIONS_COLLECTION, reservationId);
+  await setDoc(resRef, {
+    ...fullReservation,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
 
   // 3. If advance amount > 0, record real Payment record in `payments` collection
   if (reservationData.advanceAmount && reservationData.advanceAmount > 0) {
@@ -326,7 +442,7 @@ export async function createReservation(
     }, userEmail);
   }
 
-  // 4. Update room status to 'Reserved' if check-in is today or upcoming
+  // 4. Update room status to 'Reserved' if check-in is today
   const today = getTodayDateString();
   if (checkInDate === today) {
     await updateRoomStatus(roomId, 'Reserved', {
@@ -360,15 +476,23 @@ export async function updateReservation(
   const existing = await getReservationById(reservationId);
   if (!existing) throw new Error('Reservation not found');
 
-  if (updates.checkInDate && updates.checkOutDate && (updates.checkInDate !== existing.checkInDate || updates.checkOutDate !== existing.checkOutDate)) {
+  const checkInDate = updates.checkInDate || existing.checkInDate;
+  const checkOutDate = updates.checkOutDate || existing.checkOutDate;
+  const checkInTime = updates.checkInTime || existing.checkInTime || '12:00';
+  const checkOutTime = updates.checkOutTime || existing.checkOutTime || '11:00';
+  const targetRoomId = updates.roomId || existing.roomId;
+
+  if (updates.checkInDate || updates.checkOutDate || updates.roomId || updates.checkInTime || updates.checkOutTime) {
     const avail = await checkRoomAvailability(
-      updates.roomId || existing.roomId,
-      updates.checkInDate,
-      updates.checkOutDate,
+      targetRoomId,
+      checkInDate,
+      checkOutDate,
+      checkInTime,
+      checkOutTime,
       reservationId
     );
     if (!avail.isAvailable) {
-      throw new Error(avail.conflictReason || 'Room is unavailable for new dates.');
+      throw new Error(avail.conflictReason || 'Room is unavailable for requested schedule.');
     }
   }
 
@@ -380,14 +504,10 @@ export async function updateReservation(
 
   localFallbackStore.saveReservation({ ...existing, ...payload });
 
-  try {
-    await updateDoc(doc(db, RESERVATIONS_COLLECTION, reservationId), {
-      ...payload,
-      updatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    // Handled locally
-  }
+  await updateDoc(doc(db, RESERVATIONS_COLLECTION, reservationId), {
+    ...payload,
+    updatedAt: serverTimestamp(),
+  });
 
   await logActivity({
     action: 'RESERVATION_UPDATED',
@@ -420,14 +540,10 @@ export async function cancelReservation(
 
   localFallbackStore.saveReservation({ ...existing, ...updates });
 
-  try {
-    await updateDoc(doc(db, RESERVATIONS_COLLECTION, reservationId), {
-      ...updates,
-      updatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    // Local fallback
-  }
+  await updateDoc(doc(db, RESERVATIONS_COLLECTION, reservationId), {
+    ...updates,
+    updatedAt: serverTimestamp(),
+  });
 
   // Release room if it was set to Reserved for this reservation
   const allRooms = await getRooms();
@@ -465,14 +581,10 @@ export async function markReservationNoShow(
 
   localFallbackStore.saveReservation({ ...existing, ...updates });
 
-  try {
-    await updateDoc(doc(db, RESERVATIONS_COLLECTION, reservationId), {
-      ...updates,
-      updatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    // Local fallback
-  }
+  await updateDoc(doc(db, RESERVATIONS_COLLECTION, reservationId), {
+    ...updates,
+    updatedAt: serverTimestamp(),
+  });
 
   // Release room
   const allRooms = await getRooms();
@@ -520,8 +632,8 @@ export async function checkInFromReservation(params: {
     throw new Error(`Cannot check in a ${reservation.status} reservation.`);
   }
 
-  const checkInDate = params.checkInDate || getTodayDateString();
-  const checkInTime = params.checkInTime || getCurrentTimeString();
+  const checkInDate = params.checkInDate || reservation.checkInDate || getTodayDateString();
+  const checkInTime = params.checkInTime || reservation.checkInTime || getCurrentTimeString();
   const totalAdvance = (reservation.advanceAmount || 0) + (params.additionalAdvance || 0);
 
   // If additional advance given at check-in time, record payment
@@ -539,6 +651,9 @@ export async function checkInFromReservation(params: {
       notes: `Check-in advance payment for Room ${reservation.roomNumber} (${reservation.guestName})`,
     }, userEmail);
   }
+
+  const calculatedDays = calculateDaysBetween(checkInDate, reservation.checkOutDate);
+  const stayDays = calculatedDays > 0 ? calculatedDays : 1;
 
   // Create Stay document using stayService architecture
   const stay = await createCheckIn({
@@ -560,20 +675,20 @@ export async function checkInFromReservation(params: {
     checkInTime,
     expectedCheckOutDate: reservation.checkOutDate,
     expectedCheckOutTime: reservation.checkOutTime || '11:00',
-    numberOfDays: calculateDaysBetween(checkInDate, reservation.checkOutDate) || 1,
+    numberOfDays: stayDays,
     roomTariff: reservation.tariff,
     gstRate: 12,
     discount: 0,
     extraCharges: 0,
-    subtotal: reservation.tariff * (calculateDaysBetween(checkInDate, reservation.checkOutDate) || 1),
-    taxableAmount: reservation.tariff * (calculateDaysBetween(checkInDate, reservation.checkOutDate) || 1),
-    cgst: (reservation.tariff * (calculateDaysBetween(checkInDate, reservation.checkOutDate) || 1)) * 0.06,
-    sgst: (reservation.tariff * (calculateDaysBetween(checkInDate, reservation.checkOutDate) || 1)) * 0.06,
+    subtotal: reservation.tariff * stayDays,
+    taxableAmount: reservation.tariff * stayDays,
+    cgst: (reservation.tariff * stayDays) * 0.06,
+    sgst: (reservation.tariff * stayDays) * 0.06,
     igst: 0,
-    totalGST: (reservation.tariff * (calculateDaysBetween(checkInDate, reservation.checkOutDate) || 1)) * 0.12,
-    grossTotal: (reservation.tariff * (calculateDaysBetween(checkInDate, reservation.checkOutDate) || 1)) * 1.12,
+    totalGST: (reservation.tariff * stayDays) * 0.12,
+    grossTotal: (reservation.tariff * stayDays) * 1.12,
     advancePaid: totalAdvance,
-    balanceDue: ((reservation.tariff * (calculateDaysBetween(checkInDate, reservation.checkOutDate) || 1)) * 1.12) - totalAdvance,
+    balanceDue: ((reservation.tariff * stayDays) * 1.12) - totalAdvance,
     paymentType: params.paymentType || (reservation.paymentType as PaymentMethod) || 'Cash',
     notes: reservation.specialRequests || '',
   }, userEmail);
@@ -590,14 +705,10 @@ export async function checkInFromReservation(params: {
 
   localFallbackStore.saveReservation({ ...reservation, ...resUpdates });
 
-  try {
-    await updateDoc(doc(db, RESERVATIONS_COLLECTION, reservationId), {
-      ...resUpdates,
-      updatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    // handled
-  }
+  await updateDoc(doc(db, RESERVATIONS_COLLECTION, reservationId), {
+    ...resUpdates,
+    updatedAt: serverTimestamp(),
+  });
 
   await logActivity({
     action: 'RESERVATION_CHECKED_IN',

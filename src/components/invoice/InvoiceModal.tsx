@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Bill, HotelSettings } from '../../types';
 import { InvoiceView } from './InvoiceView';
-import { downloadInvoicePDF } from '../../utils/pdfGenerator';
+import { downloadBillPDF } from '../../utils/pdfGenerator';
 import { Printer, Download, X, AlertTriangle, Check } from 'lucide-react';
 
 interface InvoiceModalProps {
@@ -30,8 +30,7 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
   const handleDownloadPDF = async () => {
     try {
       setIsGeneratingPdf(true);
-      const filename = `RELAX-RESTO-INN-INV-${bill.billNo || bill.billId}.pdf`;
-      await downloadInvoicePDF('printable-invoice-target', filename);
+      await downloadBillPDF(bill, settings);
     } catch (e) {
       console.error(e);
     } finally {

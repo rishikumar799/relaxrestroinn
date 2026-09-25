@@ -10,7 +10,8 @@ import {
   orderBy, 
   limit, 
   serverTimestamp,
-  writeBatch 
+  onSnapshot,
+  Unsubscribe 
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { Bill, Stay, Room, Payment, BillLineItem, TaxSummaryItem, BillSummaryItem, AdvanceReceiptItem } from '../types';
@@ -21,14 +22,13 @@ import { saveOrUpdateGuest } from './guestService';
 import { recordPayment } from './paymentService';
 import { logActivity } from './activityService';
 import { localFallbackStore } from './localFallbackStore';
-import { formatAmountInWords, convertAmountToWords } from '../utils/numberToWords';
 import { roundToTwo } from '../utils/currency';
-import { calculateDaysBetween, getTodayDateString, getCurrentTimeString } from '../utils/date';
+import { getTodayDateString, getCurrentTimeString } from '../utils/date';
 import { calculateLineItem, computeTaxSummary, computeBillTotals } from '../utils/tax';
 
-const BILLS_COLLECTION = 'bills';
-const STAYS_COLLECTION = 'stays';
-const RESERVATIONS_COLLECTION = 'reservations';
+export const BILLS_COLLECTION = 'bills';
+export const STAYS_COLLECTION = 'stays';
+export const RESERVATIONS_COLLECTION = 'reservations';
 
 export async function createCheckoutBill(params: {
   stay: Stay;
@@ -196,12 +196,12 @@ export async function createCheckoutBill(params: {
     companyGSTIN: stay.companyGSTIN || '',
     refOTA: stay.refOTA || '',
     refOTAGSTIN: stay.refOTAGSTIN || '',
-    stateCode: settings.stateCode || '28',
+    stateCode: settings.stateCode || '37',
     placeOfSupply: settings.placeOfSupply || 'VISAKHAPATNAM-530016',
     roomNumber: stay.roomNumber,
     roomDetails: roomDetailsStr,
     roomType: stay.roomType,
-    planType: stay.planType || 'CP',
+    planType: stay.planType || 'EP',
     checkInDate: stay.checkInDate,
     checkInTime: stay.checkInTime || settings.defaultCheckInTime || '12:00',
     checkOutDate: actualCheckOutDate,
@@ -209,7 +209,7 @@ export async function createCheckoutBill(params: {
     bookingId: stay.bookingId || '',
     reservationId: stay.bookingId || '',
     grcNumber: stay.grcNumber || '',
-    paymentType: finalPaymentType || stay.paymentType || 'Wallet',
+    paymentType: finalPaymentType || stay.paymentType || 'Cash',
     numberOfDays,
     lineItems,
     subtotal: totals.subtotal,
@@ -239,19 +239,15 @@ export async function createCheckoutBill(params: {
     updatedAt: new Date().toISOString(),
   };
 
-  // 1. Save Bill Document
+  // 1. Save Bill Document in Firestore
   localFallbackStore.saveBill(bill);
-  try {
-    await setDoc(doc(db, BILLS_COLLECTION, billId), {
-      ...bill,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    // Handled via local fallback
-  }
+  await setDoc(doc(db, BILLS_COLLECTION, billId), {
+    ...bill,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
 
-  // 2. Update Stay Document -> status: 'checked_out', billId
+  // 2. Update Stay Document in Firestore -> status: 'checked_out', billId
   await updateDoc(doc(db, STAYS_COLLECTION, stay.stayId), {
     status: 'checked_out',
     billId,
@@ -268,10 +264,10 @@ export async function createCheckoutBill(params: {
     updatedAt: serverTimestamp(),
   });
 
-  // 3. Update Room Status -> Available
+  // 3. Update Room Status -> Available in Firestore
   await updateRoomStatus(stay.roomId, 'Available', undefined, userEmail);
 
-  // 4. Record checkout payment if any
+  // 4. Record checkout payment in Firestore if any
   if (finalPaymentAmount > 0) {
     await recordPayment({
       billId,
@@ -288,14 +284,14 @@ export async function createCheckoutBill(params: {
     }, userEmail);
   }
 
-  // 5. Update Guest totalSpent
+  // 5. Update Guest totalSpent in Firestore
   await saveOrUpdateGuest({
     guestId: stay.guestId,
     totalSpent: totals.grossTotal,
     lastStayDate: billDate,
   });
 
-  // 5.5 If stay was created from a reservation, update reservation status -> CHECKED_OUT
+  // 6. If stay was created from a reservation, update reservation status -> CHECKED_OUT
   const linkedResId = stay.bookingId || (stay as any).reservationId;
   if (linkedResId && linkedResId.startsWith('RES-')) {
     try {
@@ -322,7 +318,7 @@ export async function createCheckoutBill(params: {
     }
   }
 
-  // 6. Audit Log
+  // 7. Audit Activity Logs
   await logActivity({
     action: 'CHECKOUT_COMPLETED',
     userEmail,
@@ -357,7 +353,7 @@ export async function createManualBill(manualBillData: Partial<Bill>, userEmail 
         {
           id: 'li-1',
           date: manualBillData.checkInDate || billDate,
-          roomDetails: manualBillData.roomDetails || `${manualBillData.roomNumber || '309'}-${(manualBillData.roomType || 'SUIT ROOM').toUpperCase()}`,
+          roomDetails: manualBillData.roomDetails || `${manualBillData.roomNumber || '309'}-${(manualBillData.roomType || 'SUITE ROOM').toUpperCase()}`,
           description: 'TARIFF',
           rate: manualBillData.subtotal || 1785.71,
           numberOfDays: manualBillData.numberOfDays || 1,
@@ -398,7 +394,7 @@ export async function createManualBill(manualBillData: Partial<Bill>, userEmail 
   const childCount = manualBillData.paxChild !== undefined ? manualBillData.paxChild : 0;
   const paxText = manualBillData.pax || `(Adult : ${adultCount}, Child : ${childCount})`;
 
-  const roomDetailsStr = manualBillData.roomDetails || `${manualBillData.roomNumber || '309'}-${(manualBillData.roomType || 'SUIT ROOM').toUpperCase()}${manualBillData.planType ? ` ( Plan Type : ${manualBillData.planType} )` : ''}`;
+  const roomDetailsStr = manualBillData.roomDetails || `${manualBillData.roomNumber || '309'}-${(manualBillData.roomType || 'SUITE ROOM').toUpperCase()}${manualBillData.planType ? ` ( Plan Type : ${manualBillData.planType} )` : ''}`;
 
   const advanceDetails = manualBillData.advanceReceiptDetails || manualBillData.advanceDetails || (totalAdvance > 0 ? [{
     date: billDate,
@@ -434,11 +430,11 @@ export async function createManualBill(manualBillData: Partial<Bill>, userEmail 
     companyGSTIN: manualBillData.companyGSTIN || '',
     refOTA: manualBillData.refOTA || '',
     refOTAGSTIN: manualBillData.refOTAGSTIN || '',
-    stateCode: manualBillData.stateCode || settings.stateCode || '28',
+    stateCode: manualBillData.stateCode || settings.stateCode || '37',
     placeOfSupply: manualBillData.placeOfSupply || settings.placeOfSupply || 'VISAKHAPATNAM-530016',
     roomNumber: manualBillData.roomNumber || '309',
     roomDetails: roomDetailsStr,
-    roomType: manualBillData.roomType || 'SUIT ROOM',
+    roomType: manualBillData.roomType || 'SUITE ROOM',
     planType: manualBillData.planType || 'CP',
     checkInDate: manualBillData.checkInDate || billDate,
     checkInTime: manualBillData.checkInTime || settings.defaultCheckInTime || '12:00',
@@ -447,7 +443,7 @@ export async function createManualBill(manualBillData: Partial<Bill>, userEmail 
     bookingId: manualBillData.bookingId || '',
     reservationId: manualBillData.reservationId || manualBillData.bookingId || '',
     grcNumber: manualBillData.grcNumber || '',
-    paymentType: manualBillData.paymentType || 'Wallet',
+    paymentType: manualBillData.paymentType || 'Cash',
     numberOfDays: manualBillData.numberOfDays || 1,
     lineItems,
     subtotal: totals.subtotal,
@@ -478,15 +474,11 @@ export async function createManualBill(manualBillData: Partial<Bill>, userEmail 
   };
 
   localFallbackStore.saveBill(fullBill);
-  try {
-    await setDoc(doc(db, BILLS_COLLECTION, billId), {
-      ...fullBill,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    // Handled via local fallback
-  }
+  await setDoc(doc(db, BILLS_COLLECTION, billId), {
+    ...fullBill,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
 
   if (totalAdvance > 0) {
     await recordPayment({
@@ -495,7 +487,7 @@ export async function createManualBill(manualBillData: Partial<Bill>, userEmail 
       guestName: fullBill.guestName,
       roomNumber: fullBill.roomNumber,
       amount: totalAdvance,
-      paymentType: (fullBill.paymentType as any) || 'Wallet',
+      paymentType: (fullBill.paymentType as any) || 'Cash',
       referenceNumber: 'MANUAL-PAY',
       paymentDate: billDate,
       notes: `Manual entry payment for Bill ${billNo}`,
@@ -513,8 +505,7 @@ export async function createManualBill(manualBillData: Partial<Bill>, userEmail 
   return fullBill;
 }
 
-
-export async function getBills(maxLimit = 100): Promise<Bill[]> {
+export async function getBills(maxLimit = 150): Promise<Bill[]> {
   try {
     const q = query(
       collection(db, BILLS_COLLECTION),
@@ -542,6 +533,29 @@ export async function getBills(maxLimit = 100): Promise<Bill[]> {
   }
 }
 
+export function subscribeToBills(onUpdate: (bills: Bill[]) => void): Unsubscribe {
+  try {
+    const q = query(
+      collection(db, BILLS_COLLECTION),
+      orderBy('createdAt', 'desc'),
+      limit(100)
+    );
+    return onSnapshot(q, (snapshot) => {
+      const bills = snapshot.docs
+        .map(d => ({ billId: d.id, ...d.data() } as Bill))
+        .filter(b => !b.deleted);
+      bills.forEach(b => localFallbackStore.saveBill(b));
+      onUpdate(bills);
+    }, (err) => {
+      console.warn('Bills subscription error:', err);
+      getBills().then(onUpdate).catch(() => {});
+    });
+  } catch (e) {
+    getBills().then(onUpdate).catch(() => {});
+    return () => {};
+  }
+}
+
 export async function searchBills(filterParam: string | { searchTerm?: string; status?: string; billType?: string; startDate?: string; endDate?: string }): Promise<Bill[]> {
   const all = await getBills(300);
   if (!filterParam) return all;
@@ -550,131 +564,117 @@ export async function searchBills(filterParam: string | { searchTerm?: string; s
     if (!filterParam.trim()) return all;
     const term = filterParam.toLowerCase().trim();
     return all.filter(b => 
-      b.billNo.toLowerCase().includes(term) ||
-      b.guestName.toLowerCase().includes(term) ||
-      b.guestPhone.toLowerCase().includes(term) ||
-      b.roomNumber.toLowerCase().includes(term) ||
+      (b.billNo && b.billNo.toLowerCase().includes(term)) ||
+      (b.guestName && b.guestName.toLowerCase().includes(term)) ||
+      (b.guestPhone && b.guestPhone.includes(term)) ||
+      (b.roomNumber && b.roomNumber.includes(term)) ||
+      (b.companyName && b.companyName.toLowerCase().includes(term)) ||
       (b.companyGSTIN && b.companyGSTIN.toLowerCase().includes(term))
     );
   }
 
   const { searchTerm, status, billType, startDate, endDate } = filterParam;
   return all.filter(b => {
-    if (status && b.status !== status) return false;
-    if (billType && b.billType !== billType) return false;
+    if (status && status !== 'all' && b.status !== status) return false;
+    if (billType && billType !== 'all' && b.billType !== billType) return false;
     if (startDate && b.billDate < startDate) return false;
     if (endDate && b.billDate > endDate) return false;
     if (searchTerm && searchTerm.trim()) {
       const term = searchTerm.toLowerCase().trim();
-      const matches = 
-        b.billNo.toLowerCase().includes(term) ||
-        b.guestName.toLowerCase().includes(term) ||
-        b.guestPhone.toLowerCase().includes(term) ||
-        b.roomNumber.toLowerCase().includes(term) ||
+      const match = (b.billNo && b.billNo.toLowerCase().includes(term)) ||
+        (b.guestName && b.guestName.toLowerCase().includes(term)) ||
+        (b.guestPhone && b.guestPhone.includes(term)) ||
+        (b.roomNumber && b.roomNumber.includes(term)) ||
+        (b.companyName && b.companyName.toLowerCase().includes(term)) ||
         (b.companyGSTIN && b.companyGSTIN.toLowerCase().includes(term));
-      if (!matches) return false;
+      if (!match) return false;
     }
     return true;
   });
-}
-
-export async function getBillsByGuestName(guestName: string): Promise<Bill[]> {
-  const all = await getBills(200);
-  const term = guestName.toLowerCase().trim();
-  return all.filter(b => b.guestName.toLowerCase().includes(term));
 }
 
 export async function getBillById(billId: string): Promise<Bill | null> {
   try {
     const snap = await getDoc(doc(db, BILLS_COLLECTION, billId));
     if (snap.exists()) {
-      const data = { billId: snap.id, ...snap.data() } as Bill;
-      localFallbackStore.saveBill(data);
-      return data;
+      return { billId: snap.id, ...snap.data() } as Bill;
     }
   } catch (error) {
-    // try fallback
+    // fallback
   }
-  return localFallbackStore.getBills().find(b => b.billId === billId) || null;
+  return localFallbackStore.getBills().find(b => b.billId === billId && !b.deleted) || null;
 }
 
-export async function voidBill(billId: string, voidReason: string, userEmail = 'admin'): Promise<void> {
-  const localBill = localFallbackStore.getBills().find(b => b.billId === billId);
-  if (localBill) {
-    localFallbackStore.saveBill({ ...localBill, status: 'void', voidReason, updatedAt: new Date().toISOString() });
-  }
-
+export async function getBillByBillNo(billNo: string): Promise<Bill | null> {
   try {
-    const billRef = doc(db, BILLS_COLLECTION, billId);
-    await updateDoc(billRef, {
-      status: 'void',
-      voidReason,
-      updatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    // Handled locally
+    const q = query(collection(db, BILLS_COLLECTION), where('billNo', '==', billNo));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      return { billId: snap.docs[0].id, ...snap.docs[0].data() } as Bill;
+    }
+  } catch (error) {
+    // fallback
   }
+  return localFallbackStore.getBills().find(b => b.billNo === billNo && !b.deleted) || null;
+}
+
+export async function cancelBill(billId: string, reason = 'Cancelled by administrator', userEmail = 'admin'): Promise<void> {
+  const bill = await getBillById(billId);
+  if (!bill) throw new Error('Bill not found');
+
+  const updates = {
+    status: 'cancelled' as const,
+    notes: `${bill.notes ? bill.notes + ' | ' : ''}Cancelled: ${reason}`,
+    updatedAt: new Date().toISOString(),
+  };
+
+  localFallbackStore.saveBill({ ...bill, ...updates });
+
+  await updateDoc(doc(db, BILLS_COLLECTION, billId), {
+    status: 'cancelled',
+    notes: updates.notes,
+    updatedAt: serverTimestamp(),
+  });
 
   await logActivity({
-    action: 'BILL_VOIDED',
+    action: 'BILL_CANCELLED',
     userEmail,
     entityType: 'bill',
     entityId: billId,
-    description: `Bill ${billId} was marked as VOID: ${voidReason}`,
+    description: `Bill ${bill.billNo} for ${bill.guestName} cancelled. Reason: ${reason}`,
   });
 }
 
-export async function softDeleteBill(billId: string, userEmail = 'admin'): Promise<void> {
-  const localBill = localFallbackStore.getBills().find(b => b.billId === billId);
-  if (localBill) {
-    localFallbackStore.saveBill({ ...localBill, deleted: true, deletedAt: new Date().toISOString() });
-  }
+export async function getBillsByGuestName(guestName: string): Promise<Bill[]> {
+  const all = await getBills(300);
+  const term = guestName.toLowerCase().trim();
+  return all.filter(b => b.guestName && b.guestName.toLowerCase().includes(term));
+}
 
-  try {
-    const billRef = doc(db, BILLS_COLLECTION, billId);
-    await updateDoc(billRef, {
-      deleted: true,
-      deletedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    // Handled locally
-  }
+export async function getBillsByGuestId(guestId: string): Promise<Bill[]> {
+  const all = await getBills(300);
+  return all.filter(b => b.guestId === guestId);
+}
+
+export const voidBill = cancelBill;
+
+export async function deleteBill(billId: string, userEmail = 'admin'): Promise<void> {
+  const bill = await getBillById(billId);
+  if (!bill) throw new Error('Bill not found');
+
+  localFallbackStore.saveBill({ ...bill, deleted: true });
+
+  await updateDoc(doc(db, BILLS_COLLECTION, billId), {
+    deleted: true,
+    deletedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
 
   await logActivity({
     action: 'BILL_DELETED',
     userEmail,
     entityType: 'bill',
     entityId: billId,
-    description: `Bill ${billId} soft-deleted`,
-  });
-}
-
-export async function deleteBill(billId: string, userEmail = 'admin'): Promise<void> {
-  return softDeleteBill(billId, userEmail);
-}
-
-export async function updateBill(billId: string, updates: Partial<Bill>, userEmail = 'admin'): Promise<void> {
-  const localBill = localFallbackStore.getBills().find(b => b.billId === billId);
-  if (localBill) {
-    localFallbackStore.saveBill({ ...localBill, ...updates, updatedAt: new Date().toISOString() });
-  }
-
-  try {
-    const billRef = doc(db, BILLS_COLLECTION, billId);
-    await updateDoc(billRef, {
-      ...updates,
-      updatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    // Handled locally
-  }
-
-  await logActivity({
-    action: 'BILL_EDITED',
-    userEmail,
-    entityType: 'bill',
-    entityId: billId,
-    description: `Bill ${billId} was updated`,
+    description: `Bill ${bill.billNo} deleted from active records`,
   });
 }

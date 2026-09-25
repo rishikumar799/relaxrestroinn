@@ -17,7 +17,7 @@ import {
 import { Bill, BillLineItem, HotelSettings, PaymentMethod, AdvanceReceiptItem } from '../types';
 import { createManualBill } from '../services/billService';
 import { getNextInvoiceNumber } from '../services/counterService';
-import { getTodayDateString, getCurrentTimeString } from '../utils/date';
+import { getTodayDateString, getCurrentTimeString, formatTime12H } from '../utils/date';
 import { formatINR, roundToTwo } from '../utils/currency';
 import { formatAmountInWords } from '../utils/numberToWords';
 import { calculateLineItem, computeBillTotals, computeTaxSummary } from '../utils/tax';
@@ -558,44 +558,106 @@ export const ManualBill: React.FC<ManualBillProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-stone-800 mb-1">
-                    Checkin Date & Time
+                  <label className="block text-xs font-bold text-stone-800 mb-1 flex items-center justify-between">
+                    <span>Checkin Date & Time</span>
+                    <span className="text-[10px] text-orange-600 font-mono font-bold">{formatTime12H(checkInTime)}</span>
                   </label>
                   <div className="flex gap-2">
                     <input
                       type="date"
                       value={checkInDate}
                       onChange={(e) => setCheckInDate(e.target.value)}
-                      className="w-full px-2 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs"
+                      className="w-full px-2.5 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs font-medium"
                     />
                     <input
                       type="time"
                       value={checkInTime}
                       onChange={(e) => setCheckInTime(e.target.value)}
-                      className="w-24 px-2 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs"
+                      className="w-28 px-2.5 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs font-medium"
                     />
+                  </div>
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setCheckInTime(getCurrentTimeString())}
+                      className="text-[10px] px-1.5 py-0.5 bg-orange-100 hover:bg-orange-200 text-orange-800 rounded font-bold cursor-pointer"
+                    >
+                      Now
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCheckInTime('10:00')}
+                      className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                    >
+                      10 AM
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCheckInTime('12:00')}
+                      className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                    >
+                      12 PM
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCheckInTime('14:00')}
+                      className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                    >
+                      2 PM
+                    </button>
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-stone-800 mb-1">
-                    Checkout Date & Time
+                  <label className="block text-xs font-bold text-stone-800 mb-1 flex items-center justify-between">
+                    <span>Checkout Date & Time</span>
+                    <span className="text-[10px] text-orange-600 font-mono font-bold">{formatTime12H(checkOutTime)}</span>
                   </label>
                   <div className="flex gap-2">
                     <input
                       type="date"
                       value={checkOutDate}
                       onChange={(e) => setCheckOutDate(e.target.value)}
-                      className="w-full px-2 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs"
+                      className="w-full px-2.5 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs font-medium"
                     />
                     <input
                       type="time"
                       value={checkOutTime}
                       onChange={(e) => setCheckOutTime(e.target.value)}
-                      className="w-24 px-2 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs"
+                      className="w-28 px-2.5 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs font-medium"
                     />
+                  </div>
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setCheckOutTime(getCurrentTimeString())}
+                      className="text-[10px] px-1.5 py-0.5 bg-orange-100 hover:bg-orange-200 text-orange-800 rounded font-bold cursor-pointer"
+                    >
+                      Now
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCheckOutTime('11:00')}
+                      className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                    >
+                      11 AM
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCheckOutTime('12:00')}
+                      className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                    >
+                      12 PM
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCheckOutTime('18:00')}
+                      className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                    >
+                      6 PM
+                    </button>
                   </div>
                 </div>
               </div>

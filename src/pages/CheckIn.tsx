@@ -30,7 +30,7 @@ import {
   findAvailableRooms,
   cancelReservation 
 } from '../services/reservationService';
-import { getTodayDateString, getCurrentTimeString, calculateDaysBetween, formatDateForDisplay } from '../utils/date';
+import { getTodayDateString, getCurrentTimeString, calculateDaysBetween, formatDateForDisplay, formatTime12H } from '../utils/date';
 import { formatINR, roundToTwo } from '../utils/currency';
 import { useToast } from '../components/common/Toast';
 
@@ -106,7 +106,9 @@ export const CheckIn: React.FC<CheckInProps> = ({
   const [resGuestPhone, setResGuestPhone] = useState('');
   const [resGuestEmail, setResGuestEmail] = useState('');
   const [resCheckInDate, setResCheckInDate] = useState(today);
+  const [resCheckInTime, setResCheckInTime] = useState(settings?.defaultCheckInTime || '12:00');
   const [resCheckOutDate, setResCheckOutDate] = useState(tomorrow);
+  const [resCheckOutTime, setResCheckOutTime] = useState(settings?.defaultCheckOutTime || '11:00');
   const [resAdults, setResAdults] = useState(2);
   const [resChildren, setResChildren] = useState(0);
   const [resAdvanceAmount, setResAdvanceAmount] = useState(0);
@@ -244,9 +246,18 @@ export const CheckIn: React.FC<CheckInProps> = ({
       return;
     }
 
-    if (expectedCheckOutDate <= checkInDate) {
-      toast.error('Invalid Dates', 'Expected check-out date must be strictly after check-in date.');
+    if (expectedCheckOutDate < checkInDate) {
+      toast.error('Invalid Dates', 'Expected check-out date cannot be before check-in date.');
       return;
+    }
+
+    // Determine final expected checkout time with intelligent same-day fallback
+    let finalExpectedCheckOutTime = expectedCheckOutTime || '11:00';
+    if (expectedCheckOutDate === checkInDate && finalExpectedCheckOutTime <= checkInTime) {
+      const [h, m] = (checkInTime || '12:00').split(':').map(Number);
+      const nextH = Math.min(23, (h || 0) + 2);
+      finalExpectedCheckOutTime = `${String(nextH).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`;
+      setExpectedCheckOutTime(finalExpectedCheckOutTime);
     }
 
     try {
@@ -273,9 +284,9 @@ export const CheckIn: React.FC<CheckInProps> = ({
         refOTA: refOTA.trim(),
         refOTAGSTIN: refOTAGSTIN.trim(),
         checkInDate,
-        checkInTime,
+        checkInTime: checkInTime || getCurrentTimeString(),
         expectedCheckOutDate,
-        expectedCheckOutTime,
+        expectedCheckOutTime: finalExpectedCheckOutTime,
         numberOfDays,
         roomTariff,
         gstRate,
@@ -317,8 +328,8 @@ export const CheckIn: React.FC<CheckInProps> = ({
       toast.error('Validation Error', 'Please select an available room.');
       return;
     }
-    if (resCheckOutDate <= resCheckInDate) {
-      toast.error('Invalid Dates', 'Check-out date must be after check-in date.');
+    if (resCheckOutDate < resCheckInDate) {
+      toast.error('Invalid Dates', 'Check-out date cannot be before check-in date.');
       return;
     }
 
@@ -335,9 +346,9 @@ export const CheckIn: React.FC<CheckInProps> = ({
         planType: resSelectedRoom.planType || 'EP',
         tariff: resSelectedRoom.tariff || 1500,
         checkInDate: resCheckInDate,
-        checkInTime: '12:00',
+        checkInTime: resCheckInTime || '12:00',
         checkOutDate: resCheckOutDate,
-        checkOutTime: '11:00',
+        checkOutTime: resCheckOutTime || '11:00',
         numberOfDays: calculateDaysBetween(resCheckInDate, resCheckOutDate) || 1,
         adults: resAdults,
         children: resChildren,
@@ -611,59 +622,227 @@ export const CheckIn: React.FC<CheckInProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-2">
-                <div>
-                  <label className="block text-xs font-bold text-stone-800 mb-1">
-                    Check-in Date *
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={checkInDate}
-                    onChange={(e) => setCheckInDate(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
-                  />
-                </div>
+              {/* Room Allocation and Date & Time Inputs */}
+              <div className="space-y-4 pt-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-stone-800 mb-1">
+                      Check-in Date *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={checkInDate}
+                      onChange={(e) => {
+                        const newInDate = e.target.value;
+                        setCheckInDate(newInDate);
+                        if (expectedCheckOutDate < newInDate) {
+                          setExpectedCheckOutDate(newInDate);
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
+                    />
+                    <div className="flex gap-1 mt-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCheckInDate(today);
+                          if (expectedCheckOutDate < today) setExpectedCheckOutDate(today);
+                        }}
+                        className="text-[10px] px-2 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-md font-semibold cursor-pointer"
+                      >
+                        Today
+                      </button>
+                    </div>
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-stone-800 mb-1">
-                    Check-in Time
-                  </label>
-                  <input
-                    type="time"
-                    value={checkInTime}
-                    onChange={(e) => setCheckInTime(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-800 mb-1 flex items-center justify-between">
+                      <span>Check-in Time *</span>
+                      <span className="text-[10px] text-orange-600 font-mono font-bold">{formatTime12H(checkInTime)}</span>
+                    </label>
+                    <input
+                      type="time"
+                      required
+                      value={checkInTime}
+                      onChange={(e) => {
+                        const newTime = e.target.value;
+                        setCheckInTime(newTime);
+                        if (checkInDate === expectedCheckOutDate && expectedCheckOutTime <= newTime) {
+                          const [h, m] = newTime.split(':').map(Number);
+                          const nextH = Math.min(23, (h || 0) + 2);
+                          setExpectedCheckOutTime(`${String(nextH).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`);
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
+                    />
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setCheckInTime(getCurrentTimeString())}
+                        className="text-[10px] px-1.5 py-0.5 bg-orange-100 hover:bg-orange-200 text-orange-800 rounded font-bold cursor-pointer"
+                        title="Current Time"
+                      >
+                        Now
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCheckInTime('10:00')}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                      >
+                        10 AM
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCheckInTime('12:00')}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                      >
+                        12 PM
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCheckInTime('14:00')}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                      >
+                        2 PM
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCheckInTime('18:00')}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                      >
+                        6 PM
+                      </button>
+                    </div>
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-stone-800 mb-1">
-                    Expected Checkout *
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={expectedCheckOutDate}
-                    onChange={(e) => setExpectedCheckOutDate(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-800 mb-1">
+                      Expected Checkout *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={expectedCheckOutDate}
+                      onChange={(e) => {
+                        const newOutDate = e.target.value;
+                        setExpectedCheckOutDate(newOutDate);
+                        if (newOutDate === checkInDate && expectedCheckOutTime <= checkInTime) {
+                          const [h, m] = checkInTime.split(':').map(Number);
+                          const nextH = Math.min(23, (h || 0) + 2);
+                          setExpectedCheckOutTime(`${String(nextH).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`);
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
+                    />
+                    <div className="flex gap-1 mt-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExpectedCheckOutDate(checkInDate);
+                          const [h, m] = checkInTime.split(':').map(Number);
+                          const nextH = Math.min(23, (h || 0) + 2);
+                          setExpectedCheckOutTime(`${String(nextH).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`);
+                        }}
+                        className="text-[10px] px-1.5 py-0.5 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-md font-semibold cursor-pointer"
+                        title="Same Day Check-out"
+                      >
+                        Same Day
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const d = new Date(checkInDate || today);
+                          d.setDate(d.getDate() + 1);
+                          setExpectedCheckOutDate(d.toISOString().split('T')[0]);
+                          setExpectedCheckOutTime('11:00');
+                        }}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-md font-semibold cursor-pointer"
+                      >
+                        Next Day
+                      </button>
+                    </div>
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-stone-800 mb-1">
-                    Nights / Days
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={numberOfDays}
-                    onChange={(e) => {
-                      setManualDaysOverride(true);
-                      setNumberOfDays(parseInt(e.target.value, 10) || 1);
-                    }}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
-                  />
+                  <div>
+                    <label className="block text-xs font-bold text-stone-800 mb-1 flex items-center justify-between">
+                      <span>Checkout Time *</span>
+                      <span className="text-[10px] text-orange-600 font-mono font-bold">{formatTime12H(expectedCheckOutTime)}</span>
+                    </label>
+                    <input
+                      type="time"
+                      required
+                      value={expectedCheckOutTime}
+                      onChange={(e) => setExpectedCheckOutTime(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
+                    />
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const [h, m] = checkInTime.split(':').map(Number);
+                          const nextH = Math.min(23, (h || 0) + 2);
+                          setExpectedCheckOutTime(`${String(nextH).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`);
+                        }}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                        title="2 Hours later"
+                      >
+                        +2h
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const [h, m] = checkInTime.split(':').map(Number);
+                          const nextH = Math.min(23, (h || 0) + 4);
+                          setExpectedCheckOutTime(`${String(nextH).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`);
+                        }}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                        title="4 Hours later"
+                      >
+                        +4h
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExpectedCheckOutTime('11:00')}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                      >
+                        11 AM
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExpectedCheckOutTime('20:00')}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                      >
+                        8 PM
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExpectedCheckOutTime('23:00')}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                      >
+                        11 PM
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-stone-800 mb-1">
+                      Nights / Days
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={numberOfDays}
+                      onChange={(e) => {
+                        setManualDaysOverride(true);
+                        setNumberOfDays(parseInt(e.target.value, 10) || 1);
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
+                    />
+                    <div className="text-[10px] text-stone-500 mt-1.5 font-mono">
+                      {checkInDate === expectedCheckOutDate ? 'Day-use (1 Day)' : `${numberOfDays} Night(s)`}
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -1045,7 +1224,7 @@ export const CheckIn: React.FC<CheckInProps> = ({
                 Dates & Real-time Room Availability Check
               </h2>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-stone-800 mb-1">
                     Check-in Date *
@@ -1054,9 +1233,53 @@ export const CheckIn: React.FC<CheckInProps> = ({
                     type="date"
                     required
                     value={resCheckInDate}
-                    onChange={(e) => setResCheckInDate(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
+                    onChange={(e) => {
+                      const newInDate = e.target.value;
+                      setResCheckInDate(newInDate);
+                      if (resCheckOutDate < newInDate) {
+                        setResCheckOutDate(newInDate);
+                      }
+                    }}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
                   />
+                  <div className="flex gap-1 mt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setResCheckInDate(today)}
+                      className="text-[10px] px-2 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-md font-semibold cursor-pointer"
+                    >
+                      Today
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1 flex items-center justify-between">
+                    <span>Check-in Time</span>
+                    <span className="text-[10px] text-orange-600 font-mono font-bold">{formatTime12H(resCheckInTime)}</span>
+                  </label>
+                  <input
+                    type="time"
+                    value={resCheckInTime}
+                    onChange={(e) => setResCheckInTime(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
+                  />
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setResCheckInTime('12:00')}
+                      className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                    >
+                      12 PM
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setResCheckInTime('14:00')}
+                      className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                    >
+                      2 PM
+                    </button>
+                  </div>
                 </div>
 
                 <div>
@@ -1068,8 +1291,50 @@ export const CheckIn: React.FC<CheckInProps> = ({
                     required
                     value={resCheckOutDate}
                     onChange={(e) => setResCheckOutDate(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
                   />
+                  <div className="flex gap-1 mt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date(resCheckInDate || today);
+                        d.setDate(d.getDate() + 1);
+                        setResCheckOutDate(d.toISOString().split('T')[0]);
+                      }}
+                      className="text-[10px] px-2 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-md font-semibold cursor-pointer"
+                    >
+                      Next Day
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1 flex items-center justify-between">
+                    <span>Check-out Time</span>
+                    <span className="text-[10px] text-orange-600 font-mono font-bold">{formatTime12H(resCheckOutTime)}</span>
+                  </label>
+                  <input
+                    type="time"
+                    value={resCheckOutTime}
+                    onChange={(e) => setResCheckOutTime(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-medium focus:border-orange-500 focus:outline-hidden"
+                  />
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setResCheckOutTime('11:00')}
+                      className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                    >
+                      11 AM
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setResCheckOutTime('12:00')}
+                      className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                    >
+                      12 PM
+                    </button>
+                  </div>
                 </div>
               </div>
 

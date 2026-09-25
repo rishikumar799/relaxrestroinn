@@ -8,14 +8,16 @@ import {
   deleteDoc, 
   query, 
   orderBy, 
-  serverTimestamp 
+  serverTimestamp,
+  onSnapshot,
+  Unsubscribe
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { Room, RoomStatus, PlanType } from '../types';
 import { logActivity } from './activityService';
 import { localFallbackStore } from './localFallbackStore';
 
-const ROOMS_COLLECTION = 'rooms';
+export const ROOMS_COLLECTION = 'rooms';
 
 export const OFFICIAL_ROOM_INVENTORY: {
   roomNumber: string;
@@ -56,14 +58,15 @@ export const OFFICIAL_ROOM_INVENTORY: {
 ];
 
 /**
- * Ensures the exact 24 rooms exist in Firestore in a non-destructive manner.
- * Preserves all existing room settings (tariff, status, current guests, stays).
+ * Ensures the exact 24 rooms exist in Firestore in an idempotent and non-destructive manner.
+ * Preserves all active room data (status, tariffs, current guests, stays) while guaranteeing
+ * that all 24 rooms are physically saved into Firestore.
  */
 export async function syncOfficialInventory(existingRooms: Room[]): Promise<Room[]> {
   const existingMap = new Map<string, Room>();
   existingRooms.forEach(r => {
-    existingMap.set(r.roomNumber, r);
-    existingMap.set(r.roomId, r);
+    if (r.roomNumber) existingMap.set(r.roomNumber, r);
+    if (r.roomId) existingMap.set(r.roomId, r);
   });
 
   const updatedRooms: Room[] = [];
@@ -79,15 +82,16 @@ export async function syncOfficialInventory(existingRooms: Room[]): Promise<Room
       };
       updatedRooms.push(merged);
 
-      if (existing.roomType !== item.defaultType) {
+      if (existing.roomType !== item.defaultType || existing.floor !== item.floor) {
         try {
-          const roomRef = doc(db, ROOMS_COLLECTION, existing.roomId);
-          updateDoc(roomRef, {
+          const roomRef = doc(db, ROOMS_COLLECTION, existing.roomId || `room-${item.roomNumber}`);
+          await updateDoc(roomRef, {
             roomType: item.defaultType,
+            floor: item.floor,
             updatedAt: serverTimestamp(),
-          }).catch(() => {});
+          });
         } catch (e) {
-          // Non-blocking
+          // Ignore
         }
       }
     } else {
@@ -115,12 +119,13 @@ export async function syncOfficialInventory(existingRooms: Room[]): Promise<Room
     }
   }
 
-  // Sort by room number numerically
+  // Numerical sorting
   updatedRooms.sort((a, b) => parseInt(a.roomNumber, 10) - parseInt(b.roomNumber, 10));
 
+  // If any rooms are missing from Firestore, write them immediately to Firestore
   if (missingRoomsToCreate.length > 0) {
     localFallbackStore.saveRooms(updatedRooms);
-    Promise.all(
+    await Promise.allSettled(
       missingRoomsToCreate.map(async (r) => {
         try {
           const roomRef = doc(db, ROOMS_COLLECTION, r.roomId);
@@ -128,27 +133,35 @@ export async function syncOfficialInventory(existingRooms: Room[]): Promise<Room
             ...r,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
-          });
+          }, { merge: true });
         } catch (e) {
-          // Handled via local fallback
+          console.warn(`Firestore save room ${r.roomNumber} warning:`, e);
         }
       })
-    ).catch(err => console.warn('Non-blocking inventory sync warning:', err));
+    );
   }
 
   return updatedRooms;
 }
 
+/**
+ * Loads all 24 rooms from Firestore as single source of truth.
+ */
 export async function getRooms(): Promise<Room[]> {
   let rooms: Room[] = [];
   try {
     const q = query(collection(db, ROOMS_COLLECTION), orderBy('roomNumber', 'asc'));
     const snapshot = await getDocs(q);
-    rooms = snapshot.docs.map(d => ({ roomId: d.id, ...d.data() })) as Room[];
+    if (!snapshot.empty) {
+      rooms = snapshot.docs.map(d => ({ roomId: d.id, ...d.data() })) as Room[];
+    }
   } catch (error) {
+    console.warn('Firestore getRooms query error, attempting fallback:', error);
     try {
       const snap = await getDocs(collection(db, ROOMS_COLLECTION));
-      rooms = snap.docs.map(d => ({ roomId: d.id, ...d.data() })) as Room[];
+      if (!snap.empty) {
+        rooms = snap.docs.map(d => ({ roomId: d.id, ...d.data() })) as Room[];
+      }
     } catch (e) {
       rooms = localFallbackStore.getRooms();
     }
@@ -161,6 +174,32 @@ export async function getRooms(): Promise<Room[]> {
   const synced = await syncOfficialInventory(rooms);
   localFallbackStore.saveRooms(synced);
   return synced;
+}
+
+/**
+ * Realtime subscription to rooms collection in Firestore for instant cross-device updates.
+ */
+export function subscribeToRooms(onUpdate: (rooms: Room[]) => void): Unsubscribe {
+  try {
+    const q = query(collection(db, ROOMS_COLLECTION), orderBy('roomNumber', 'asc'));
+    return onSnapshot(q, (snapshot) => {
+      if (!snapshot.empty) {
+        const rooms = snapshot.docs.map(d => ({ roomId: d.id, ...d.data() })) as Room[];
+        const sorted = rooms.sort((a, b) => parseInt(a.roomNumber, 10) - parseInt(b.roomNumber, 10));
+        localFallbackStore.saveRooms(sorted);
+        onUpdate(sorted);
+      } else {
+        // Empty Firestore, trigger sync
+        getRooms().then(onUpdate).catch(() => {});
+      }
+    }, (err) => {
+      console.warn('Rooms onSnapshot subscription error:', err);
+      getRooms().then(onUpdate).catch(() => {});
+    });
+  } catch (e) {
+    getRooms().then(onUpdate).catch(() => {});
+    return () => {};
+  }
 }
 
 export async function updateRoomStatus(
@@ -191,28 +230,25 @@ export async function updateRoomStatus(
     payload.currentExpectedCheckOut = null;
   }
 
-  // Update local store immediately
+  // Update local store immediately for instant UI reaction
   const localRooms = localFallbackStore.getRooms();
   const found = localRooms.find(r => r.roomId === roomId || r.roomNumber === roomId);
   if (found) {
     localFallbackStore.updateRoom({ ...found, ...payload });
   }
 
-  try {
-    const roomRef = doc(db, ROOMS_COLLECTION, roomId);
-    await updateDoc(roomRef, {
-      ...payload,
-      updatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    // Handled via local fallback
-  }
+  const targetDocId = found?.roomId || (roomId.startsWith('room-') ? roomId : `room-${roomId}`);
+  const roomRef = doc(db, ROOMS_COLLECTION, targetDocId);
+  await setDoc(roomRef, {
+    ...payload,
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
 
   await logActivity({
     action: 'ROOM_STATUS_CHANGED',
     userEmail,
     entityType: 'room',
-    entityId: roomId,
+    entityId: targetDocId,
     description: `Room ${found?.roomNumber || roomId} status changed to ${status}`,
   });
 }
@@ -238,16 +274,12 @@ export async function createRoom(roomData: Partial<Room>, userEmail = 'admin'): 
 
   localFallbackStore.updateRoom(fullRoom);
 
-  try {
-    const roomRef = doc(db, ROOMS_COLLECTION, roomId);
-    await setDoc(roomRef, {
-      ...fullRoom,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    // Handled via local fallback
-  }
+  const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+  await setDoc(roomRef, {
+    ...fullRoom,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
 
   await logActivity({
     action: 'ROOM_ADDED',
@@ -267,21 +299,18 @@ export async function updateRoom(roomId: string, roomData: Partial<Room>, userEm
     localFallbackStore.updateRoom({ ...found, ...roomData, updatedAt: new Date().toISOString() });
   }
 
-  try {
-    const roomRef = doc(db, ROOMS_COLLECTION, roomId);
-    await updateDoc(roomRef, {
-      ...roomData,
-      updatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    // Handled via local fallback
-  }
+  const targetDocId = found?.roomId || (roomId.startsWith('room-') ? roomId : `room-${roomId}`);
+  const roomRef = doc(db, ROOMS_COLLECTION, targetDocId);
+  await updateDoc(roomRef, {
+    ...roomData,
+    updatedAt: serverTimestamp(),
+  });
 
   await logActivity({
     action: 'ROOM_UPDATED',
     userEmail,
     entityType: 'room',
-    entityId: roomId,
+    entityId: targetDocId,
     description: `Room ${roomData.roomNumber || roomId} details updated`,
   });
 }
@@ -298,11 +327,8 @@ export async function deleteRoom(roomId: string, userEmail = 'admin'): Promise<v
   const rooms = localFallbackStore.getRooms().filter(r => r.roomId !== roomId);
   localFallbackStore.saveRooms(rooms);
 
-  try {
-    await deleteDoc(doc(db, ROOMS_COLLECTION, roomId));
-  } catch (e) {
-    // Handled via local fallback
-  }
+  const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+  await deleteDoc(roomRef);
 
   await logActivity({
     action: 'ROOM_STATUS_CHANGED',

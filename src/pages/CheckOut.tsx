@@ -317,20 +317,75 @@ export const CheckOut: React.FC<CheckOutProps> = ({
                       value={actualCheckOutDate}
                       min={selectedStay.checkInDate}
                       onChange={(e) => setActualCheckOutDate(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500"
+                      className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-hidden"
                     />
+                    <div className="flex gap-1 mt-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setActualCheckOutDate(today)}
+                        className="text-[10px] px-2 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-md font-semibold cursor-pointer"
+                      >
+                        Today
+                      </button>
+                    </div>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-stone-800 mb-1">
-                      Actual Check-out Time
+                    <label className="block text-xs font-bold text-stone-800 mb-1 flex items-center justify-between">
+                      <span>Actual Check-out Time</span>
+                      <span className="text-[10px] text-orange-600 font-mono font-bold">{formatTime12H(actualCheckOutTime)}</span>
                     </label>
                     <input
                       type="time"
                       value={actualCheckOutTime}
                       onChange={(e) => setActualCheckOutTime(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500"
+                      className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs focus:ring-2 focus:ring-orange-500 focus:outline-hidden"
                     />
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setActualCheckOutTime(getCurrentTimeString())}
+                        className="text-[10px] px-1.5 py-0.5 bg-orange-100 hover:bg-orange-200 text-orange-800 rounded font-bold cursor-pointer"
+                        title="Current Time"
+                      >
+                        Now
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActualCheckOutTime('10:00')}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                      >
+                        10 AM
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActualCheckOutTime('11:00')}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                      >
+                        11 AM
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActualCheckOutTime('12:00')}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                      >
+                        12 PM
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActualCheckOutTime('14:00')}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                      >
+                        2 PM
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActualCheckOutTime('18:00')}
+                        className="text-[10px] px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded font-medium cursor-pointer"
+                      >
+                        6 PM
+                      </button>
+                    </div>
                   </div>
 
                   <div>
@@ -345,8 +400,11 @@ export const CheckOut: React.FC<CheckOutProps> = ({
                         setManualDaysOverride(true);
                         setNumberOfDays(Math.max(1, parseInt(e.target.value) || 1));
                       }}
-                      className="w-full px-3 py-1.5 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs font-bold focus:ring-2 focus:ring-orange-500 font-mono"
+                      className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-stone-900 text-xs font-bold focus:ring-2 focus:ring-orange-500 font-mono focus:outline-hidden"
                     />
+                    <div className="text-[10px] text-stone-500 mt-1.5 font-mono">
+                      {actualCheckOutDate === selectedStay.checkInDate ? 'Same-day Stay' : `${numberOfDays} Day(s) Stay`}
+                    </div>
                   </div>
                 </div>
               </div>
